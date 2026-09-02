@@ -44,6 +44,9 @@ interface TradeContextType {
   updateTrade: (id: string, tradeData: Partial<Trade>) => Promise<Trade>;
   deleteTrade: (id: string) => Promise<void>;
   importTrades: (newTrades: Partial<Trade>[]) => Promise<{ imported: number; duplicates: number }>;
+  addAccount: (accountData: { name: string; initial_balance: number; currency?: string }) => Promise<Account>;
+  deleteAccount: (id: string) => Promise<void>;
+  setDefaultAccount: (id: string) => Promise<void>;
   addSetup: (name: string, description?: string) => Promise<Setup>;
   addStrategy: (name: string, description?: string) => Promise<Strategy>;
   addTag: (name: string, color?: string) => Promise<Tag>;
@@ -591,6 +594,98 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     return { imported: added.length, duplicates: duplicateCount };
   };
 
+  // Add custom Account
+  const addAccount = async ({
+    name,
+    initial_balance,
+    currency = 'USD',
+  }: {
+    name: string;
+    initial_balance: number;
+    currency?: string;
+  }): Promise<Account> => {
+    const isFirstAccount = accounts.length === 0;
+    const newAccount: Account = {
+      id: `acc-${Date.now()}`,
+      user_id: user?.id || 'user-default',
+      name: name.trim(),
+      initial_balance: Number(initial_balance) || 0,
+      currency,
+      is_default: isFirstAccount,
+      created_at: new Date().toISOString(),
+    };
+
+    const supabase = createClient();
+    if (supabase && user) {
+      try {
+        const { data: inserted, error } = await supabase
+          .from('accounts')
+          .insert([
+            {
+              user_id: user.id,
+              name: newAccount.name,
+              initial_balance: newAccount.initial_balance,
+              currency: newAccount.currency,
+              is_default: newAccount.is_default,
+            },
+          ])
+          .select()
+          .single();
+
+        if (!error && inserted) {
+          newAccount.id = inserted.id;
+        }
+      } catch (err) {
+        console.error('Failed to create account in Supabase:', err);
+      }
+    }
+
+    const nextAccounts = [...accounts, newAccount];
+    setAccounts(nextAccounts);
+    persistState(trades, nextAccounts, setups, strategies, tags);
+    return newAccount;
+  };
+
+  // Delete Account
+  const deleteAccount = async (id: string): Promise<void> => {
+    const supabase = createClient();
+    if (supabase && user) {
+      try {
+        await supabase.from('accounts').delete().eq('id', id);
+      } catch (err) {
+        console.error('Failed to delete account in Supabase:', err);
+      }
+    }
+
+    const nextAccounts = accounts.filter((a) => a.id !== id);
+    if (nextAccounts.length > 0 && !nextAccounts.some((a) => a.is_default)) {
+      nextAccounts[0].is_default = true;
+    }
+    setAccounts(nextAccounts);
+    persistState(trades, nextAccounts, setups, strategies, tags);
+  };
+
+  // Set Default Account
+  const setDefaultAccount = async (id: string): Promise<void> => {
+    const nextAccounts = accounts.map((a) => ({
+      ...a,
+      is_default: a.id === id,
+    }));
+
+    const supabase = createClient();
+    if (supabase && user) {
+      try {
+        await supabase.from('accounts').update({ is_default: false }).eq('user_id', user.id);
+        await supabase.from('accounts').update({ is_default: true }).eq('id', id);
+      } catch (err) {
+        console.error('Failed to set default account in Supabase:', err);
+      }
+    }
+
+    setAccounts(nextAccounts);
+    persistState(trades, nextAccounts, setups, strategies, tags);
+  };
+
   // Add custom Setup
   const addSetup = async (name: string, description?: string): Promise<Setup> => {
     const newSetup: Setup = {
@@ -751,6 +846,9 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         updateTrade,
         deleteTrade,
         importTrades,
+        addAccount,
+        deleteAccount,
+        setDefaultAccount,
         addSetup,
         addStrategy,
         addTag,
