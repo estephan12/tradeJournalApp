@@ -8,22 +8,22 @@ import {
   Strategy,
   Tag,
   TradeFilterOptions,
-} from '@/types/trade';
+} from '../types/trade';
 import {
   DEMO_ACCOUNTS,
   DEMO_SETUPS,
   DEMO_STRATEGIES,
   DEMO_TAGS,
   DEMO_TRADES,
-} from '@/lib/demo-data';
+} from '../lib/demo-data';
 import {
   calculatePnL,
   calculateRiskAmount,
   calculateRiskPercent,
   calculateRMultiple,
   calculateResult,
-} from '@/lib/calculations';
-import { isSupabaseConfigured, createClient } from '@/lib/supabase/client';
+} from '../lib/calculations';
+import { isSupabaseConfigured, createClient } from '../lib/supabase/client';
 import type { User } from '@supabase/supabase-js';
 
 interface TradeContextType {
@@ -63,11 +63,69 @@ interface TradeContextType {
   user: User | null;
   signOut: () => Promise<void>;
   isLoading: boolean;
+  syncStatus: 'synced' | 'syncing' | 'offline' | 'error';
+  syncError: string | null;
+  syncWithCloud: () => Promise<void>;
+  exportTradesToJson: () => void;
+  importTradesFromJson: (jsonString: string) => Promise<{ imported: number; error?: string }>;
 }
 
 const TradeContext = createContext<TradeContextType | undefined>(undefined);
 
 const LOCAL_STORAGE_KEY = 'tradelab_trades_data_v1';
+
+export function isValidUUID(id: string | null | undefined): boolean {
+  if (!id) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+export function isDemoTrade(trade: Partial<Trade>): boolean {
+  if (!trade.id) return false;
+  return trade.id.startsWith('trade-demo-') || trade.id.startsWith('trade-0');
+}
+
+export function parseSupabaseTrade(
+  row: any,
+  userAccounts: Account[] = [],
+  userSetups: Setup[] = [],
+  userStrats: Strategy[] = []
+): Trade {
+  const notes = row.notes || {};
+  const tags = row.tags || notes.tags || [];
+  const accountName = notes.account_name || userAccounts.find((a) => a.id === row.account_id)?.name || 'Main Account';
+  const strategyName = notes.strategy_name || userStrats.find((s) => s.id === row.strategy_id)?.name || undefined;
+  const setupName = notes.setup_name || userSetups.find((s) => s.id === row.setup_id)?.name || undefined;
+
+  return {
+    ...row,
+    id: row.id,
+    user_id: row.user_id,
+    account_id: row.account_id,
+    account_name: accountName,
+    strategy_id: row.strategy_id,
+    strategy_name: strategyName,
+    setup_id: row.setup_id,
+    setup_name: setupName,
+    tags,
+    entry_price: Number(row.entry_price) || 0,
+    exit_price: row.exit_price !== null && row.exit_price !== undefined ? Number(row.exit_price) : null,
+    stop_loss: row.stop_loss !== null && row.stop_loss !== undefined ? Number(row.stop_loss) : null,
+    take_profit: row.take_profit !== null && row.take_profit !== undefined ? Number(row.take_profit) : null,
+    position_size: Number(row.position_size) || 1,
+    pnl: row.pnl !== null && row.pnl !== undefined ? Number(row.pnl) : null,
+    pnl_percent: row.pnl_percent !== null && row.pnl_percent !== undefined ? Number(row.pnl_percent) : null,
+    r_multiple: row.r_multiple !== null && row.r_multiple !== undefined ? Number(row.r_multiple) : null,
+    risk_amount: row.risk_amount !== null && row.risk_amount !== undefined ? Number(row.risk_amount) : null,
+    risk_percent: row.risk_percent !== null && row.risk_percent !== undefined ? Number(row.risk_percent) : null,
+    commission: Number(row.commission || 0),
+    swap: Number(row.swap || 0),
+    confidence: row.confidence !== null && row.confidence !== undefined ? Number(row.confidence) : 7,
+    discipline: row.discipline !== null && row.discipline !== undefined ? Number(row.discipline) : 8,
+    notes,
+    created_at: row.created_at || new Date().toISOString(),
+    updated_at: row.updated_at || new Date().toISOString(),
+  };
+}
 
 export function TradeProvider({ children }: { children: React.ReactNode }) {
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -79,6 +137,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
   const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [user, setUser] = useState<User | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('offline');
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   // Modals & Drawers
   const [selectedTradeForDetail, setSelectedTradeForDetail] = useState<Trade | null>(null);
@@ -100,7 +160,9 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     }
     setUser(null);
     setIsDemoMode(true);
-    resetToDemoData();
+    setSyncStatus('offline');
+    setSyncError(null);
+    loadLocalInitialState();
   };
 
   const loadLocalInitialState = () => {
@@ -110,10 +172,10 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         const parsed = JSON.parse(saved);
         if (parsed.hasCustomData || (Array.isArray(parsed.trades) && parsed.trades.length > 0)) {
           setTrades(parsed.trades || []);
-          if (parsed.accounts) setAccounts(parsed.accounts);
-          if (parsed.setups) setSetups(parsed.setups);
-          if (parsed.strategies) setStrategies(parsed.strategies);
-          if (parsed.tags) setTags(parsed.tags);
+          if (parsed.accounts && parsed.accounts.length > 0) setAccounts(parsed.accounts);
+          if (parsed.setups && parsed.setups.length > 0) setSetups(parsed.setups);
+          if (parsed.strategies && parsed.strategies.length > 0) setStrategies(parsed.strategies);
+          if (parsed.tags && parsed.tags.length > 0) setTags(parsed.tags);
           setIsLoading(false);
           return;
         }
@@ -130,55 +192,256 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     const supabase = createClient();
     if (!supabase) return;
     setIsLoading(true);
+    setSyncStatus('syncing');
+    setSyncError(null);
     try {
-      const { data: dbTrades } = await supabase
+      // 1. Fetch or create user accounts
+      let currentAccounts = accounts;
+      const { data: dbAccounts } = await supabase.from('accounts').select('*').eq('user_id', userId);
+      if (dbAccounts && dbAccounts.length > 0) {
+        currentAccounts = dbAccounts;
+        setAccounts(dbAccounts);
+      } else {
+        // Create initial default account in Supabase so foreign key inserts succeed with valid UUID
+        const { data: newAcc, error: createAccErr } = await supabase
+          .from('accounts')
+          .insert([
+            {
+              user_id: userId,
+              name: 'Main Account',
+              initial_balance: 10000.0,
+              currency: 'USD',
+              is_default: true,
+            },
+          ])
+          .select()
+          .single();
+
+        if (newAcc && !createAccErr) {
+          currentAccounts = [newAcc];
+          setAccounts([newAcc]);
+        }
+      }
+
+      // 2. Fetch Setups, Strategies, Tags
+      let currentSetups = setups;
+      const { data: dbSetups } = await supabase.from('setups').select('*').eq('user_id', userId);
+      if (dbSetups && dbSetups.length > 0) {
+        currentSetups = dbSetups;
+        setSetups(dbSetups);
+      }
+
+      let currentStrats = strategies;
+      const { data: dbStrats } = await supabase.from('strategies').select('*').eq('user_id', userId);
+      if (dbStrats && dbStrats.length > 0) {
+        currentStrats = dbStrats;
+        setStrategies(dbStrats);
+      }
+
+      const { data: dbTags } = await supabase.from('tags').select('*').eq('user_id', userId);
+      if (dbTags && dbTags.length > 0) setTags(dbTags);
+
+      // 3. Fetch Trades from Supabase
+      const { data: rawDbTrades, error: dbTradesError } = await supabase
         .from('trades')
         .select('*')
         .eq('user_id', userId)
         .order('date', { ascending: false });
 
-      if (dbTrades && dbTrades.length > 0) {
-        setTrades(dbTrades);
-        persistState(dbTrades);
-      } else {
-        // If Supabase table is empty or unpopulated, do not erase local trades
+      if (dbTradesError) {
+        console.error('Supabase fetch trades error:', dbTradesError);
+        setSyncStatus('error');
+        setSyncError(dbTradesError.message);
         loadLocalInitialState();
+        return;
       }
 
-      const { data: dbAccounts } = await supabase.from('accounts').select('*').eq('user_id', userId);
-      if (dbAccounts && dbAccounts.length > 0) setAccounts(dbAccounts);
+      const parsedDbTrades: Trade[] = (rawDbTrades || []).map((row) =>
+        parseSupabaseTrade(row, currentAccounts, currentSetups, currentStrats)
+      );
 
-      const { data: dbSetups } = await supabase.from('setups').select('*').eq('user_id', userId);
-      if (dbSetups && dbSetups.length > 0) setSetups(dbSetups);
+      // 4. SMART MERGE: Check local storage for any non-demo trades that are not yet in Supabase
+      let localTrades: Trade[] = [];
+      try {
+        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed.trades)) {
+            localTrades = parsed.trades.filter((t: Trade) => !isDemoTrade(t));
+          }
+        }
+      } catch {
+        // ignore
+      }
 
-      const { data: dbStrats } = await supabase.from('strategies').select('*').eq('user_id', userId);
-      if (dbStrats && dbStrats.length > 0) setStrategies(dbStrats);
+      const dbKeys = new Set(
+        parsedDbTrades.map(
+          (t) =>
+            `${t.symbol.toUpperCase()}|${t.direction}|${t.date}|${t.entry_price}|${t.exit_price ?? ''}|${t.pnl ?? ''}`
+        )
+      );
 
-      const { data: dbTags } = await supabase.from('tags').select('*').eq('user_id', userId);
-      if (dbTags && dbTags.length > 0) setTags(dbTags);
-    } catch (err) {
+      const unsyncedTrades = localTrades.filter((t) => {
+        const key = `${t.symbol.toUpperCase()}|${t.direction}|${t.date}|${t.entry_price}|${t.exit_price ?? ''}|${t.pnl ?? ''}`;
+        return !dbKeys.has(key);
+      });
+
+      // Upload unsynced local trades to Supabase so they are NEVER lost!
+      if (unsyncedTrades.length > 0) {
+        const defaultAccountId = currentAccounts.find((a) => isValidUUID(a.id))?.id || null;
+        const uploadPayloads = unsyncedTrades.map((t) => ({
+          user_id: userId,
+          account_id: isValidUUID(t.account_id) ? t.account_id : defaultAccountId,
+          symbol: (t.symbol || 'BTCUSDT').toUpperCase().trim(),
+          direction: t.direction || 'LONG',
+          date: t.date || new Date().toISOString().split('T')[0],
+          entry_time: t.entry_time || null,
+          exit_time: t.exit_time || null,
+          timeframe: t.timeframe || '15m',
+          session: t.session || 'New York',
+          entry_price: Number(t.entry_price) || 0,
+          exit_price: t.exit_price !== undefined && t.exit_price !== null ? Number(t.exit_price) : null,
+          stop_loss: t.stop_loss !== undefined && t.stop_loss !== null ? Number(t.stop_loss) : null,
+          take_profit: t.take_profit !== undefined && t.take_profit !== null ? Number(t.take_profit) : null,
+          position_size: Number(t.position_size) || 1,
+          risk_amount: t.risk_amount !== undefined && t.risk_amount !== null ? Number(t.risk_amount) : null,
+          risk_percent: t.risk_percent !== undefined && t.risk_percent !== null ? Number(t.risk_percent) : null,
+          commission: Number(t.commission) || 0,
+          swap: Number(t.swap) || 0,
+          pnl: t.pnl !== undefined && t.pnl !== null ? Number(t.pnl) : null,
+          pnl_percent: t.pnl_percent !== undefined && t.pnl_percent !== null ? Number(t.pnl_percent) : null,
+          r_multiple: t.r_multiple !== undefined && t.r_multiple !== null ? Number(t.r_multiple) : null,
+          result: t.result || null,
+          strategy_id: isValidUUID(t.strategy_id) ? t.strategy_id : null,
+          setup_id: isValidUUID(t.setup_id) ? t.setup_id : null,
+          emotion: t.emotion || 'Calm',
+          confidence: t.confidence ?? 7,
+          discipline: t.discipline ?? 8,
+          mistake: t.mistake || 'None',
+          notes: {
+            ...(t.notes || {}),
+            tags: t.tags || [],
+            account_name: t.account_name,
+            strategy_name: t.strategy_name,
+            setup_name: t.setup_name,
+          },
+        }));
+
+        const { data: newlyUploaded } = await supabase.from('trades').insert(uploadPayloads).select();
+        if (newlyUploaded) {
+          const parsedUploaded = newlyUploaded.map((row) =>
+            parseSupabaseTrade(row, currentAccounts, currentSetups, currentStrats)
+          );
+          parsedDbTrades.push(...parsedUploaded);
+        }
+      }
+
+      parsedDbTrades.sort(
+        (a, b) =>
+          new Date(b.date + 'T' + (b.entry_time || '00:00')).getTime() -
+          new Date(a.date + 'T' + (a.entry_time || '00:00')).getTime()
+      );
+
+      setTrades(parsedDbTrades);
+      persistState(parsedDbTrades, currentAccounts, currentSetups, currentStrats, tags);
+      setIsDemoMode(false);
+      setSyncStatus('synced');
+    } catch (err: any) {
       console.error('Supabase fetch error, retaining local state:', err);
+      setSyncStatus('error');
+      setSyncError(err?.message || 'Error de conexión');
       loadLocalInitialState();
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Initialize data & check session
+  // Force manual cloud sync
+  const syncWithCloud = async () => {
+    if (!user) {
+      setSyncStatus('offline');
+      return;
+    }
+    await loadSupabaseData(user.id);
+  };
+
+  // Export & Import backup functions
+  const exportTradesToJson = () => {
+    const nonDemoTrades = trades.filter((t) => !isDemoTrade(t));
+    const dataToExport = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      trades: nonDemoTrades.length > 0 ? nonDemoTrades : trades,
+      accounts: accounts.filter((a) => !a.id.startsWith('acc-demo-')),
+    };
+    const blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `tradelab-backup-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const importTradesFromJson = async (jsonString: string): Promise<{ imported: number; error?: string }> => {
+    try {
+      const parsed = JSON.parse(jsonString);
+      const rawTrades = Array.isArray(parsed) ? parsed : parsed.trades;
+      if (!Array.isArray(rawTrades)) {
+        return { imported: 0, error: 'Formato inválido: falta la lista de trades' };
+      }
+      const res = await importTrades(rawTrades);
+      return { imported: res.imported };
+    } catch (err: any) {
+      return { imported: 0, error: err?.message || 'Error al procesar el archivo JSON' };
+    }
+  };
+
+  // Initialize data, check session & setup Realtime listener
   useEffect(() => {
     const supabase = createClient();
     if (!supabase) {
       loadLocalInitialState();
+      setSyncStatus('offline');
       return;
     }
+
+    let realtimeChannel: any = null;
+
+    const setupRealtime = (userId: string) => {
+      if (realtimeChannel) {
+        supabase.removeChannel(realtimeChannel);
+      }
+      realtimeChannel = supabase
+        .channel(`public:trades:${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'trades',
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            console.log('Realtime change detected in trades:', payload.eventType);
+            loadSupabaseData(userId);
+          }
+        )
+        .subscribe();
+    };
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
         setIsDemoMode(false);
+        setSyncStatus('synced');
         loadSupabaseData(session.user.id);
+        setupRealtime(session.user.id);
       } else {
         loadLocalInitialState();
+        setSyncStatus('offline');
       }
     });
 
@@ -188,19 +451,28 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       if (session?.user) {
         setUser(session.user);
         setIsDemoMode(false);
-        // Only trigger DB load on initial sign in or explicit user sign in, NEVER on background TOKEN_REFRESHED!
+        setSyncStatus('synced');
         if (event === 'SIGNED_IN') {
           loadSupabaseData(session.user.id);
+          setupRealtime(session.user.id);
         }
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsDemoMode(true);
+        setSyncStatus('offline');
+        if (realtimeChannel) {
+          supabase.removeChannel(realtimeChannel);
+          realtimeChannel = null;
+        }
         loadLocalInitialState();
       }
     });
 
     return () => {
       subscription.unsubscribe();
+      if (realtimeChannel) {
+        supabase.removeChannel(realtimeChannel);
+      }
     };
   }, []);
 
@@ -238,7 +510,16 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     persistState(DEMO_TRADES, DEMO_ACCOUNTS, DEMO_SETUPS, DEMO_STRATEGIES, DEMO_TAGS);
   };
 
-  const clearAllTrades = () => {
+  const clearAllTrades = async () => {
+    const supabase = createClient();
+    if (supabase && user) {
+      try {
+        await supabase.from('trades').delete().eq('user_id', user.id);
+        setSyncStatus('synced');
+      } catch (err) {
+        console.error('Error clearing trades in Supabase:', err);
+      }
+    }
     setTrades([]);
     persistState([]);
     setSelectedTradeForDetail(null);
@@ -305,7 +586,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     const computed = computeDerivedFields(tradeData);
     const newTrade: Trade = {
       id: `trade-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-      user_id: 'user-default',
+      user_id: user?.id || 'user-default',
       account_id: computed.account_id || accounts[0]?.id,
       account_name: accounts.find((a) => a.id === computed.account_id)?.name || accounts[0]?.name || 'Main Account',
       date: computed.date || new Date().toISOString().split('T')[0],
@@ -334,8 +615,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       setup_name: setups.find((s) => s.id === computed.setup_id)?.name,
       tags: computed.tags || [],
       emotion: computed.emotion || 'Calm',
-      confidence: computed.confidence || 7,
-      discipline: computed.discipline || 8,
+      confidence: computed.confidence ?? 7,
+      discipline: computed.discipline ?? 8,
       mistake: computed.mistake || 'None',
       notes: computed.notes || {},
       created_at: new Date().toISOString(),
@@ -345,9 +626,18 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     const supabase = createClient();
     if (supabase && user) {
       try {
+        let validAccountId = isValidUUID(computed.account_id) ? computed.account_id : null;
+        if (!validAccountId && accounts.length > 0) {
+          const found = accounts.find((a) => isValidUUID(a.id));
+          if (found) validAccountId = found.id;
+        }
+
+        const validStrategyId = isValidUUID(computed.strategy_id) ? computed.strategy_id : null;
+        const validSetupId = isValidUUID(computed.setup_id) ? computed.setup_id : null;
+
         const payload = {
           user_id: user.id,
-          account_id: computed.account_id || null,
+          account_id: validAccountId,
           symbol: (computed.symbol || 'BTCUSDT').toUpperCase().trim(),
           direction: computed.direction || 'LONG',
           date: computed.date || new Date().toISOString().split('T')[0],
@@ -356,36 +646,51 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
           timeframe: computed.timeframe || '15m',
           session: computed.session || 'New York',
           entry_price: Number(computed.entry_price) || 0,
-          exit_price: computed.exit_price,
-          stop_loss: computed.stop_loss,
-          take_profit: computed.take_profit,
+          exit_price: computed.exit_price !== undefined && computed.exit_price !== null ? Number(computed.exit_price) : null,
+          stop_loss: computed.stop_loss !== undefined && computed.stop_loss !== null ? Number(computed.stop_loss) : null,
+          take_profit: computed.take_profit !== undefined && computed.take_profit !== null ? Number(computed.take_profit) : null,
           position_size: Number(computed.position_size) || 1,
-          risk_amount: computed.risk_amount,
-          risk_percent: computed.risk_percent,
-          commission: computed.commission || 0,
-          swap: computed.swap || 0,
-          pnl: computed.pnl,
-          pnl_percent: computed.pnl_percent,
-          r_multiple: computed.r_multiple,
-          result: computed.result,
-          strategy_id: computed.strategy_id || null,
-          setup_id: computed.setup_id || null,
+          risk_amount: computed.risk_amount !== undefined && computed.risk_amount !== null ? Number(computed.risk_amount) : null,
+          risk_percent: computed.risk_percent !== undefined && computed.risk_percent !== null ? Number(computed.risk_percent) : null,
+          commission: Number(computed.commission) || 0,
+          swap: Number(computed.swap) || 0,
+          pnl: computed.pnl !== undefined && computed.pnl !== null ? Number(computed.pnl) : null,
+          pnl_percent: computed.pnl_percent !== undefined && computed.pnl_percent !== null ? Number(computed.pnl_percent) : null,
+          r_multiple: computed.r_multiple !== undefined && computed.r_multiple !== null ? Number(computed.r_multiple) : null,
+          result: computed.result || null,
+          strategy_id: validStrategyId,
+          setup_id: validSetupId,
           emotion: computed.emotion || 'Calm',
-          confidence: computed.confidence || 7,
-          discipline: computed.discipline || 8,
+          confidence: computed.confidence ?? 7,
+          discipline: computed.discipline ?? 8,
           mistake: computed.mistake || 'None',
-          notes: computed.notes || {},
+          notes: {
+            ...(computed.notes || {}),
+            tags: computed.tags || [],
+            account_name: newTrade.account_name,
+            strategy_name: newTrade.strategy_name,
+            setup_name: newTrade.setup_name,
+          },
         };
         const { data: inserted, error: insertError } = await supabase.from('trades').insert([payload]).select().single();
-        if (!insertError && inserted) {
+        if (insertError) {
+          console.error('Supabase trade insert error:', insertError);
+          setSyncError(insertError.message);
+        } else if (inserted) {
           newTrade.id = inserted.id;
+          newTrade.user_id = user.id;
+          setSyncStatus('synced');
         }
       } catch (err) {
         console.error('Failed to insert trade into Supabase:', err);
       }
     }
 
-    const nextTrades = [newTrade, ...trades].sort(
+    // If currently only demo trades exist, replace with user's real trades
+    const isOnlyDemoTrades = trades.length > 0 && trades.every((t) => isDemoTrade(t));
+    const baseTrades = isOnlyDemoTrades ? [] : trades;
+
+    const nextTrades = [newTrade, ...baseTrades].sort(
       (a, b) => new Date(b.date + 'T' + (b.entry_time || '00:00')).getTime() - new Date(a.date + 'T' + (a.entry_time || '00:00')).getTime()
     );
 
@@ -409,22 +714,58 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     } as Trade;
 
     const supabase = createClient();
-    if (supabase && user) {
+    if (supabase && user && isValidUUID(id)) {
       try {
-        await supabase.from('trades').update({
-          symbol: updatedTrade.symbol,
-          direction: updatedTrade.direction,
-          date: updatedTrade.date,
-          entry_price: updatedTrade.entry_price,
-          exit_price: updatedTrade.exit_price,
-          stop_loss: updatedTrade.stop_loss,
-          take_profit: updatedTrade.take_profit,
-          position_size: updatedTrade.position_size,
-          pnl: updatedTrade.pnl,
-          r_multiple: updatedTrade.r_multiple,
-          result: updatedTrade.result,
-          updated_at: new Date().toISOString(),
-        }).eq('id', id);
+        let validAccountId = isValidUUID(updatedTrade.account_id) ? updatedTrade.account_id : null;
+        if (!validAccountId && accounts.length > 0) {
+          const found = accounts.find((a) => isValidUUID(a.id));
+          if (found) validAccountId = found.id;
+        }
+
+        const validStrategyId = isValidUUID(updatedTrade.strategy_id) ? updatedTrade.strategy_id : null;
+        const validSetupId = isValidUUID(updatedTrade.setup_id) ? updatedTrade.setup_id : null;
+
+        await supabase
+          .from('trades')
+          .update({
+            symbol: (updatedTrade.symbol || '').toUpperCase().trim(),
+            direction: updatedTrade.direction,
+            date: updatedTrade.date,
+            entry_time: updatedTrade.entry_time || null,
+            exit_time: updatedTrade.exit_time || null,
+            timeframe: updatedTrade.timeframe || null,
+            session: updatedTrade.session || null,
+            entry_price: Number(updatedTrade.entry_price) || 0,
+            exit_price: updatedTrade.exit_price !== undefined && updatedTrade.exit_price !== null ? Number(updatedTrade.exit_price) : null,
+            stop_loss: updatedTrade.stop_loss !== undefined && updatedTrade.stop_loss !== null ? Number(updatedTrade.stop_loss) : null,
+            take_profit: updatedTrade.take_profit !== undefined && updatedTrade.take_profit !== null ? Number(updatedTrade.take_profit) : null,
+            position_size: Number(updatedTrade.position_size) || 1,
+            risk_amount: updatedTrade.risk_amount !== undefined && updatedTrade.risk_amount !== null ? Number(updatedTrade.risk_amount) : null,
+            risk_percent: updatedTrade.risk_percent !== undefined && updatedTrade.risk_percent !== null ? Number(updatedTrade.risk_percent) : null,
+            commission: Number(updatedTrade.commission) || 0,
+            swap: Number(updatedTrade.swap) || 0,
+            pnl: updatedTrade.pnl !== undefined && updatedTrade.pnl !== null ? Number(updatedTrade.pnl) : null,
+            pnl_percent: updatedTrade.pnl_percent !== undefined && updatedTrade.pnl_percent !== null ? Number(updatedTrade.pnl_percent) : null,
+            r_multiple: updatedTrade.r_multiple !== undefined && updatedTrade.r_multiple !== null ? Number(updatedTrade.r_multiple) : null,
+            result: updatedTrade.result || null,
+            account_id: validAccountId,
+            strategy_id: validStrategyId,
+            setup_id: validSetupId,
+            emotion: updatedTrade.emotion,
+            confidence: updatedTrade.confidence,
+            discipline: updatedTrade.discipline,
+            mistake: updatedTrade.mistake,
+            notes: {
+              ...(updatedTrade.notes || {}),
+              tags: updatedTrade.tags || [],
+              account_name: updatedTrade.account_name,
+              strategy_name: updatedTrade.strategy_name,
+              setup_name: updatedTrade.setup_name,
+            },
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', id);
+        setSyncStatus('synced');
       } catch (err) {
         console.error('Failed to update trade in Supabase:', err);
       }
@@ -448,9 +789,10 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
   // Delete Trade
   const deleteTrade = async (id: string): Promise<void> => {
     const supabase = createClient();
-    if (supabase && user) {
+    if (supabase && user && isValidUUID(id)) {
       try {
         await supabase.from('trades').delete().eq('id', id);
+        setSyncStatus('synced');
       } catch (err) {
         console.error('Failed to delete trade in Supabase:', err);
       }
@@ -489,7 +831,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
       const trade: Trade = {
         id: `trade-imp-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-        user_id: 'user-default',
+        user_id: user?.id || 'user-default',
         account_id: computed.account_id || accounts[0]?.id,
         account_name: accounts.find((a) => a.id === computed.account_id)?.name || 'Main Account',
         date: computed.date || new Date().toISOString().split('T')[0],
@@ -527,7 +869,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     }
 
     // If currently only demo trades exist, replace them with user's real imported trades
-    const isOnlyDemoTrades = trades.length > 0 && trades.every((t) => t.id.startsWith('trade-demo-') || t.id.startsWith('trade-0'));
+    const isOnlyDemoTrades = trades.length > 0 && trades.every((t) => isDemoTrade(t));
     const baseTrades = isOnlyDemoTrades ? [] : trades;
 
     const nextTrades = [...added, ...baseTrades].sort(
@@ -541,9 +883,10 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     const supabase = createClient();
     if (supabase && user && added.length > 0) {
       try {
+        const defaultAccountId = accounts.find((a) => isValidUUID(a.id))?.id || null;
         const payloads = added.map((t) => ({
           user_id: user.id,
-          account_id: t.account_id || null,
+          account_id: isValidUUID(t.account_id) ? t.account_id : defaultAccountId,
           symbol: t.symbol,
           direction: t.direction,
           date: t.date,
@@ -564,13 +907,19 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
           pnl_percent: t.pnl_percent ?? null,
           r_multiple: t.r_multiple ?? null,
           result: t.result ?? null,
-          strategy_id: t.strategy_id || null,
-          setup_id: t.setup_id || null,
+          strategy_id: isValidUUID(t.strategy_id) ? t.strategy_id : null,
+          setup_id: isValidUUID(t.setup_id) ? t.setup_id : null,
           emotion: t.emotion || 'Calm',
           confidence: t.confidence || 7,
           discipline: t.discipline || 7,
           mistake: t.mistake || 'None',
-          notes: t.notes || {},
+          notes: {
+            ...(t.notes || {}),
+            tags: t.tags || [],
+            account_name: t.account_name,
+            strategy_name: t.strategy_name,
+            setup_name: t.setup_name,
+          },
         }));
 
         const { data: insertedTrades, error: insertErr } = await supabase
@@ -585,6 +934,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
             if (added[idx]) added[idx].id = it.id;
           });
           persistState(nextTrades);
+          setSyncStatus('synced');
         }
       } catch (err) {
         console.warn('Supabase sync warning:', err);
@@ -865,6 +1215,11 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         user,
         signOut,
         isLoading,
+        syncStatus,
+        syncError,
+        syncWithCloud,
+        exportTradesToJson,
+        importTradesFromJson,
       }}
     >
       {children}

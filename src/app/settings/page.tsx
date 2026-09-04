@@ -16,7 +16,17 @@ import {
 } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { isDemoMode, setIsDemoMode, resetToDemoData, clearAllTrades, trades } = useTrades();
+  const {
+    isDemoMode,
+    setIsDemoMode,
+    resetToDemoData,
+    clearAllTrades,
+    trades,
+    user,
+    syncWithCloud,
+    exportTradesToJson,
+    importTradesFromJson,
+  } = useTrades();
   const [currency, setCurrency] = useState('USD');
   const [copied, setCopied] = useState(false);
 
@@ -43,43 +53,109 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2">
             <Database className="w-4 h-4 text-[#38BDF8]" />
             <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-[#F5F7FA]">
-              SUPABASE DATABASE & AUTH
+              SINCRONIZACIÓN EN LA NUBE (PC Y CELULAR)
             </h2>
           </div>
           <span
             className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold ${
-              supabaseActive
+              user
                 ? 'bg-[#22C55E]/15 text-[#22C55E] border border-[#22C55E]/30'
                 : 'bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30'
             }`}
           >
-            {supabaseActive ? 'CONNECTED' : 'LOCAL MOCK / DEMO MODE'}
+            {user ? 'SINCRONIZADO CON LA NUBE' : 'MODO LOCAL (SIN CONECTAR)'}
           </span>
         </div>
 
-        <p className="text-xs text-[#8B98A8] leading-relaxed">
-          TradeLab uses Supabase with PostgreSQL Row Level Security (RLS) for multi-tenant data isolation.
-          To connect to your cloud instance, populate your credentials in <code className="text-[#38BDF8]">.env.local</code>.
-        </p>
+        {user ? (
+          <div className="p-3 bg-[#0B0F14] rounded border border-[#22C55E]/30 space-y-2 text-xs">
+            <p className="text-[#F5F7FA]">
+              Iniciaste sesión como: <strong className="text-[#22C55E] font-mono">{user.email}</strong>
+            </p>
+            <p className="text-[#8B98A8]">
+              Tus operaciones se guardan en la nube y se sincronizan en tiempo real con cualquier dispositivo (PC, celular o tablet) donde inicies sesión con esta cuenta.
+            </p>
+            <div className="pt-2">
+              <button
+                onClick={() => syncWithCloud()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B0F14] border border-[#22C55E]/40 hover:bg-[#22C55E]/10 text-xs font-mono text-[#22C55E] transition-colors"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Forzar Sincronización Ahora</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-3 bg-[#F59E0B]/10 rounded border border-[#F59E0B]/30 space-y-2 text-xs">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-[#F59E0B] shrink-0 mt-0.5" />
+              <div>
+                <p className="text-[#F5F7FA] font-semibold">
+                  Tus datos se encuentran guardados solo en este navegador.
+                </p>
+                <p className="text-[#8B98A8] mt-1">
+                  Para acceder a tu diario desde tu celular y mantener tus datos protegidos sin riesgo de que se borren, inicia sesión o crea tu cuenta gratuita.
+                </p>
+                <div className="mt-3">
+                  <a
+                    href="/login"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#38BDF8] text-[#0B0F14] font-semibold text-xs hover:bg-[#0284C7] transition-colors"
+                  >
+                    Iniciar Sesión / Crear Cuenta →
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
-        <div className="p-3 bg-[#0B0F14] rounded border border-[#26313D] space-y-2 text-xs font-mono">
-          <div className="flex justify-between">
-            <span className="text-[#8B98A8]">NEXT_PUBLIC_SUPABASE_URL:</span>
-            <span className="text-[#F5F7FA]">
-              {process.env.NEXT_PUBLIC_SUPABASE_URL ? 'Configured' : 'Not Set (Using Offline Storage)'}
+        {/* JSON Backup & Restore for 100% Data Safety */}
+        <div className="p-3 bg-[#0B0F14] rounded border border-[#26313D] space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono font-semibold text-[#F5F7FA]">
+              COPIA DE SEGURIDAD LOCAL (RESPALDO JSON)
             </span>
+            <span className="text-[10px] text-[#8B98A8] font-mono">Anti-Pérdida</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-[#8B98A8]">NEXT_PUBLIC_SUPABASE_ANON_KEY:</span>
-            <span className="text-[#F5F7FA]">
-              {process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'Configured' : 'Not Set'}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-[#8B98A8]">OPENAI_API_KEY:</span>
-            <span className="text-[#F5F7FA]">
-              {process.env.OPENAI_API_KEY ? 'Configured' : 'Fallback Mock Extraction Active'}
-            </span>
+          <p className="text-xs text-[#8B98A8]">
+            Descarga un archivo con todos tus trades para guardarlos en tu computadora o pasarlos a otro dispositivo manualmente en cualquier momento.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={exportTradesToJson}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#111820] border border-[#26313D] hover:border-[#38BDF8] text-xs font-mono text-[#F5F7FA] transition-colors"
+            >
+              <Download className="w-3.5 h-3.5 text-[#38BDF8]" />
+              <span>Exportar Respaldo (.json)</span>
+            </button>
+
+            <label className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#111820] border border-[#26313D] hover:border-[#38BDF8] text-xs font-mono text-[#F5F7FA] transition-colors cursor-pointer">
+              <ShieldCheck className="w-3.5 h-3.5 text-[#22C55E]" />
+              <span>Restaurar Respaldo (.json)</span>
+              <input
+                type="file"
+                accept=".json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = async (evt) => {
+                    const text = evt.target?.result as string;
+                    if (text) {
+                      const res = await importTradesFromJson(text);
+                      if (res.error) {
+                        alert(`Error: ${res.error}`);
+                      } else {
+                        alert(`¡Éxito! Se importaron ${res.imported} trades del respaldo.`);
+                      }
+                    }
+                  };
+                  reader.readAsText(file);
+                  e.target.value = '';
+                }}
+              />
+            </label>
           </div>
         </div>
       </div>

@@ -65,7 +65,16 @@ export default function LoginPage() {
             TRADELAB
           </h1>
           <p className="text-xs text-[#8B98A8]">
-            {isSignUp ? 'Create your personal trading journal account' : 'Enter your credentials to access your terminal'}
+            {isSignUp
+              ? 'Crea tu cuenta para sincronizar tus operaciones entre tu PC y tu celular'
+              : 'Inicia sesión con la misma cuenta en tu PC y celular para sincronizar en tiempo real'}
+          </p>
+        </div>
+
+        <div className="p-3 bg-[#38BDF8]/10 border border-[#38BDF8]/30 rounded text-xs text-[#38BDF8] flex items-start gap-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+          <p>
+            <strong>Sincronización Automática:</strong> Cualquier operación registrada localmente se guardará en tu cuenta para que puedas verla en todos tus dispositivos.
           </p>
         </div>
 
@@ -73,9 +82,9 @@ export default function LoginPage() {
           <div className="p-3 bg-[#F59E0B]/10 border border-[#F59E0B]/30 rounded text-xs text-[#F59E0B] flex items-start gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold">Supabase credentials pending:</span> Configure your{' '}
-              <code className="text-[#F5F7FA]">NEXT_PUBLIC_SUPABASE_URL</code> and{' '}
-              <code className="text-[#F5F7FA]">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in{' '}
+              <span className="font-semibold">Credenciales de Supabase pendientes:</span> Configura tu{' '}
+              <code className="text-[#F5F7FA]">NEXT_PUBLIC_SUPABASE_URL</code> y{' '}
+              <code className="text-[#F5F7FA]">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> en{' '}
               <code className="text-[#F5F7FA]">.env.local</code>.
             </div>
           </div>
@@ -97,7 +106,7 @@ export default function LoginPage() {
 
         <form onSubmit={handleAuth} className="space-y-4">
           <div>
-            <label className="block text-xs font-mono text-[#8B98A8] mb-1">Email Address</label>
+            <label className="block text-xs font-mono text-[#8B98A8] mb-1">Correo Electrónico / Email</label>
             <div className="relative">
               <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8B98A8]" />
               <input
@@ -112,7 +121,7 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-mono text-[#8B98A8] mb-1">Password</label>
+            <label className="block text-xs font-mono text-[#8B98A8] mb-1">Contraseña / Password</label>
             <div className="relative">
               <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8B98A8]" />
               <input
@@ -131,7 +140,7 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full h-9 rounded bg-[#38BDF8] hover:bg-[#0284C7] text-[#0B0F14] font-semibold text-xs transition-colors flex items-center justify-center gap-2 shadow"
           >
-            <span>{loading ? 'Processing...' : isSignUp ? 'Create Account' : 'Sign In'}</span>
+            <span>{loading ? 'Procesando...' : isSignUp ? 'Crear Cuenta y Sincronizar' : 'Iniciar Sesión'}</span>
             <ArrowRight className="w-3.5 h-3.5 stroke-[2.5]" />
           </button>
         </form>
@@ -143,13 +152,13 @@ export default function LoginPage() {
               setError('');
               setMessage('');
             }}
-            className="hover:text-[#38BDF8] transition-colors"
+            className="hover:text-[#38BDF8] transition-colors text-left"
           >
-            {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+            {isSignUp ? '¿Ya tienes cuenta? Inicia Sesión' : '¿No tienes cuenta? Regístrate gratis'}
           </button>
 
-          <Link href="/" className="text-[#38BDF8] hover:underline">
-            Offline Mode →
+          <Link href="/" className="text-[#38BDF8] hover:underline shrink-0">
+            Volver al Terminal →
           </Link>
         </div>
       </div>
