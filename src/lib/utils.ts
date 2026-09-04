@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 export function formatCurrency(value: number | null | undefined, currency: string = "$"): string {
   if (value === null || value === undefined || isNaN(value)) return "-";
   const sign = value < 0 ? "-" : value > 0 ? "+" : "";
-  const abs = Math.abs(value).toLocaleString(undefined, {
+  const abs = Math.abs(value).toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });

@@ -56,7 +56,7 @@ export function TradeCalendar() {
     setSelectedDayTrades(null);
   };
 
-  const monthName = currentDate.toLocaleString('default', { month: 'long' });
+  const monthName = currentDate.toLocaleString('en-US', { month: 'long' });
 
   // Compute monthly stats
   const monthlyStats = useMemo(() => {

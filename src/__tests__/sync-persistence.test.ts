@@ -1,7 +1,29 @@
-﻿import { describe, it, expect } from 'vitest';
-import { isValidUUID, isDemoTrade, parseSupabaseTrade } from '../context/trade-context';
+import { describe, it, expect } from 'vitest';
+import { isValidUUID, isDemoTrade, parseSupabaseTrade, sanitizeIntScale1to10 } from '../context/trade-context';
 
 describe('Sync & Persistence Safeguards', () => {
+  it('sanitizes confidence and discipline into valid 1-10 integers for PostgreSQL', () => {
+    // Floats from CSV mapping / AI extraction (e.g. 0.98 or 0.85) must be scaled to 1-10 integer
+    expect(sanitizeIntScale1to10(0.98)).toBe(10);
+    expect(sanitizeIntScale1to10('0.98')).toBe(10);
+    expect(sanitizeIntScale1to10(0.85)).toBe(9);
+    expect(sanitizeIntScale1to10(0.5)).toBe(5);
+
+    // Standard integers 1-10 must pass through
+    expect(sanitizeIntScale1to10(7)).toBe(7);
+    expect(sanitizeIntScale1to10('8')).toBe(8);
+    expect(sanitizeIntScale1to10(1)).toBe(1);
+    expect(sanitizeIntScale1to10(10)).toBe(10);
+
+    // Out of bounds clamped
+    expect(sanitizeIntScale1to10(15)).toBe(10);
+    expect(sanitizeIntScale1to10(-3)).toBe(1);
+
+    // Null/undefined/NaN fallback
+    expect(sanitizeIntScale1to10(null, 7)).toBe(7);
+    expect(sanitizeIntScale1to10(undefined, 8)).toBe(8);
+    expect(sanitizeIntScale1to10('invalid', 7)).toBe(7);
+  });
   it('validates UUIDs correctly to prevent PostgreSQL 22P02 crashes', () => {
     // Demo and temporary frontend IDs must NOT be treated as valid UUIDs
     expect(isValidUUID('acc-demo-1')).toBe(false);

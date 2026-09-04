@@ -99,7 +99,9 @@ export function Header({
         <div className="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded bg-[#0B0F14] border border-[#26313D] text-xs font-mono">
           <span className="text-[#8B98A8]">{activeAccountName}</span>
           <span className="text-[#26313D]">|</span>
-          <span className="text-[#38BDF8]">{time}</span>
+          <span className="text-[#38BDF8]" suppressHydrationWarning>
+            {time}
+          </span>
         </div>
 
         {/* Import Quick Button */}

@@ -84,6 +84,17 @@ export function isDemoTrade(trade: Partial<Trade>): boolean {
   return trade.id.startsWith('trade-demo-') || trade.id.startsWith('trade-0');
 }
 
+export function sanitizeIntScale1to10(val: unknown, fallback: number = 7): number {
+  if (val === null || val === undefined || val === '') return fallback;
+  const num = Number(val);
+  if (isNaN(num)) return fallback;
+  // If float strictly between 0 and 1 (such as AI/CSV confidence 0.98), scale to 1-10 integer
+  if (num > 0 && num < 1) {
+    return Math.min(10, Math.max(1, Math.round(num * 10)));
+  }
+  return Math.min(10, Math.max(1, Math.round(num)));
+}
+
 export function parseSupabaseTrade(
   row: any,
   userAccounts: Account[] = [],
@@ -315,8 +326,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
           strategy_id: isValidUUID(t.strategy_id) ? t.strategy_id : null,
           setup_id: isValidUUID(t.setup_id) ? t.setup_id : null,
           emotion: t.emotion || 'Calm',
-          confidence: t.confidence ?? 7,
-          discipline: t.discipline ?? 8,
+          confidence: sanitizeIntScale1to10(t.confidence, 7),
+          discipline: sanitizeIntScale1to10(t.discipline, 8),
           mistake: t.mistake || 'None',
           notes: {
             ...(t.notes || {}),
@@ -661,8 +672,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
           strategy_id: validStrategyId,
           setup_id: validSetupId,
           emotion: computed.emotion || 'Calm',
-          confidence: computed.confidence ?? 7,
-          discipline: computed.discipline ?? 8,
+          confidence: sanitizeIntScale1to10(computed.confidence, 7),
+          discipline: sanitizeIntScale1to10(computed.discipline, 8),
           mistake: computed.mistake || 'None',
           notes: {
             ...(computed.notes || {}),
@@ -752,8 +763,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
             strategy_id: validStrategyId,
             setup_id: validSetupId,
             emotion: updatedTrade.emotion,
-            confidence: updatedTrade.confidence,
-            discipline: updatedTrade.discipline,
+            confidence: sanitizeIntScale1to10(updatedTrade.confidence, 7),
+            discipline: sanitizeIntScale1to10(updatedTrade.discipline, 8),
             mistake: updatedTrade.mistake,
             notes: {
               ...(updatedTrade.notes || {}),
@@ -910,8 +921,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
           strategy_id: isValidUUID(t.strategy_id) ? t.strategy_id : null,
           setup_id: isValidUUID(t.setup_id) ? t.setup_id : null,
           emotion: t.emotion || 'Calm',
-          confidence: t.confidence || 7,
-          discipline: t.discipline || 7,
+          confidence: sanitizeIntScale1to10(t.confidence, 7),
+          discipline: sanitizeIntScale1to10(t.discipline, 8),
           mistake: t.mistake || 'None',
           notes: {
             ...(t.notes || {}),
