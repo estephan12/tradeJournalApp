@@ -43,6 +43,13 @@ describe('Sync & Persistence Safeguards', () => {
     expect(isDemoTrade({ id: 'trade-demo-1' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-01' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-036' })).toBe(true);
+    expect(isDemoTrade({ id: 'trade-btc-5' })).toBe(true);
+    expect(isDemoTrade({ id: 'trade-eur-12' })).toBe(true);
+    expect(isDemoTrade({ id: 'trade-gbp-3' })).toBe(true);
+    expect(isDemoTrade({ id: 'trade-usdjpy-2' })).toBe(true);
+    expect(isDemoTrade({ id: 'trade-xau-8' })).toBe(true);
+    expect(isDemoTrade({ user_id: 'demo-user' })).toBe(true);
+    expect(isDemoTrade({ account_id: 'acc-demo-1' })).toBe(true);
 
     // Real user trades must return false
     expect(isDemoTrade({ id: 'da8fa828-991a-46a9-913f-0a4773f7d06a' })).toBe(false);

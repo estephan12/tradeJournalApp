@@ -80,8 +80,19 @@ export function isValidUUID(id: string | null | undefined): boolean {
 }
 
 export function isDemoTrade(trade: Partial<Trade>): boolean {
-  if (!trade.id) return false;
-  return trade.id.startsWith('trade-demo-') || trade.id.startsWith('trade-0');
+  if (!trade) return false;
+  if (trade.user_id === 'demo-user') return true;
+  if (trade.account_id === 'acc-demo-1' || trade.account_id === 'acc-demo-2') return true;
+  const id = trade.id || '';
+  return (
+    id.startsWith('trade-demo-') ||
+    id.startsWith('trade-0') ||
+    id.startsWith('trade-btc-') ||
+    id.startsWith('trade-eur-') ||
+    id.startsWith('trade-gbp-') ||
+    id.startsWith('trade-usdjpy-') ||
+    id.startsWith('trade-xau-')
+  );
 }
 
 export function sanitizeIntScale1to10(val: unknown, fallback: number = 7): number {
@@ -182,13 +193,15 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.hasCustomData || (Array.isArray(parsed.trades) && parsed.trades.length > 0)) {
-          setTrades(parsed.trades || []);
+        if (parsed.clearedByUser || parsed.hasCustomData || Array.isArray(parsed.trades)) {
+          const loadedTrades = parsed.trades || [];
+          setTrades(loadedTrades);
           if (parsed.accounts && parsed.accounts.length > 0) setAccounts(parsed.accounts);
           if (parsed.setups && parsed.setups.length > 0) setSetups(parsed.setups);
           if (parsed.strategies && parsed.strategies.length > 0) setStrategies(parsed.strategies);
           if (parsed.tags && parsed.tags.length > 0) setTags(parsed.tags);
           setIsLoading(false);
+          setIsDemoMode(loadedTrades.length > 0 && loadedTrades.every((t: Trade) => isDemoTrade(t)));
           return;
         }
       }
@@ -198,6 +211,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
     setTrades(DEMO_TRADES);
     setIsLoading(false);
+    setIsDemoMode(true);
   };
 
   const loadSupabaseData = async (userId: string, isInitialLogin: boolean = false) => {
@@ -275,12 +289,22 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         parseSupabaseTrade(row, currentAccounts, currentSetups, currentStrats)
       );
 
+      // Clean out any demo trades that were previously accidentally uploaded to Supabase
+      const demoTradeIds = parsedDbTrades.filter((t) => isDemoTrade(t)).map((t) => t.id).filter(isValidUUID);
+      if (demoTradeIds.length > 0) {
+        supabase.from('trades').delete().in('id', demoTradeIds).then(() => {
+          console.log('Purged accidental demo trades from Supabase');
+        });
+      }
+
+      const realDbTrades = parsedDbTrades.filter((t) => !isDemoTrade(t));
+
       // Deduplicate DB trades by UUID and signature to heal any historical duplicated rows
       const uniqueDbTrades: Trade[] = [];
       const seenDbIds = new Set<string>();
       const seenSignatures = new Set<string>();
 
-      for (const t of parsedDbTrades) {
+      for (const t of realDbTrades) {
         const sig = `${t.symbol.toUpperCase()}|${t.direction}|${t.date}|${t.entry_time || ''}|${t.entry_price}|${t.exit_price ?? ''}|${t.pnl ?? ''}`;
         if (!seenDbIds.has(t.id) && !seenSignatures.has(sig)) {
           seenDbIds.add(t.id);
@@ -290,7 +314,16 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       }
 
       // 4. One-time initial migration ONLY when user first logs in AND Supabase is completely empty
-      if (isInitialLogin && uniqueDbTrades.length === 0) {
+      let wasClearedByUser = false;
+      try {
+        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.clearedByUser) wasClearedByUser = true;
+        }
+      } catch {}
+
+      if (isInitialLogin && uniqueDbTrades.length === 0 && !wasClearedByUser) {
         let localTrades: Trade[] = [];
         try {
           const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -529,19 +562,47 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resetToDemoData = () => {
+    setIsDemoMode(true);
     setTrades(DEMO_TRADES);
     setAccounts(DEMO_ACCOUNTS);
     setSetups(DEMO_SETUPS);
     setStrategies(DEMO_STRATEGIES);
     setTags(DEMO_TAGS);
-    persistState(DEMO_TRADES, DEMO_ACCOUNTS, DEMO_SETUPS, DEMO_STRATEGIES, DEMO_TAGS);
+    try {
+      localStorage.setItem(
+        LOCAL_STORAGE_KEY,
+        JSON.stringify({
+          trades: DEMO_TRADES,
+          accounts: DEMO_ACCOUNTS,
+          setups: DEMO_SETUPS,
+          strategies: DEMO_STRATEGIES,
+          tags: DEMO_TAGS,
+          hasCustomData: false,
+          clearedByUser: false,
+        })
+      );
+    } catch {}
   };
 
   const clearAllTrades = async () => {
     isSyncingRef.current = true;
+    setIsDemoMode(false);
     setTrades([]);
     setSelectedTradeForDetail(null);
-    persistState([], accounts, setups, strategies, tags);
+    try {
+      localStorage.setItem(
+        LOCAL_STORAGE_KEY,
+        JSON.stringify({
+          trades: [],
+          accounts,
+          setups,
+          strategies,
+          tags,
+          hasCustomData: true,
+          clearedByUser: true,
+        })
+      );
+    } catch {}
 
     const supabase = createClient();
     if (supabase && user) {
