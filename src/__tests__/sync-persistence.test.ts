@@ -55,6 +55,26 @@ describe('Sync & Persistence Safeguards', () => {
     expect(isDemoTrade({ id: 'da8fa828-991a-46a9-913f-0a4773f7d06a' })).toBe(false);
     expect(isDemoTrade({ id: 'trade-1788560000000-xyz123' })).toBe(false);
     expect(isDemoTrade({ id: 'trade-imp-1788560000000-xyz123' })).toBe(false);
+
+    // Accidental demo trades uploaded to Supabase with real UUIDs must be recognized by thesis/lesson
+    expect(
+      isDemoTrade({
+        id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+        notes: { tradeThesis: 'Clean daily breakout with rising volume during New York open.' },
+      })
+    ).toBe(true);
+    expect(
+      isDemoTrade({
+        id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+        notes: { tradeThesis: 'London open liquidity run targeting previous day high/low.' },
+      })
+    ).toBe(true);
+    expect(
+      isDemoTrade({
+        id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+        notes: { lesson: 'Gold moves with violent expansion during NY morning. Respect initial stops.' },
+      })
+    ).toBe(true);
   });
 
   it('parses Supabase trade row preserving notes, tags, and classification names', () => {

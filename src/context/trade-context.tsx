@@ -84,7 +84,7 @@ export function isDemoTrade(trade: Partial<Trade>): boolean {
   if (trade.user_id === 'demo-user') return true;
   if (trade.account_id === 'acc-demo-1' || trade.account_id === 'acc-demo-2') return true;
   const id = trade.id || '';
-  return (
+  if (
     id.startsWith('trade-demo-') ||
     id.startsWith('trade-0') ||
     id.startsWith('trade-btc-') ||
@@ -92,7 +92,32 @@ export function isDemoTrade(trade: Partial<Trade>): boolean {
     id.startsWith('trade-gbp-') ||
     id.startsWith('trade-usdjpy-') ||
     id.startsWith('trade-xau-')
-  );
+  ) {
+    return true;
+  }
+
+  // Detect demo dataset trades that were uploaded to Supabase with generated UUIDs
+  const notes = trade.notes as any;
+  if (notes && typeof notes === 'object') {
+    const thesis = typeof notes.tradeThesis === 'string' ? notes.tradeThesis : '';
+    const lesson = typeof notes.lesson === 'string' ? notes.lesson : '';
+    if (
+      thesis.includes('Clean daily breakout with rising volume') ||
+      thesis.includes('London open liquidity run targeting') ||
+      thesis.includes('London session pullback trying to catch') ||
+      thesis.includes('Asian and NY session liquidity sweep') ||
+      thesis.includes('New York session impulse on Gold') ||
+      lesson.includes('New York session momentum continues to provide clean follow-through on BTCUSDT') ||
+      lesson.includes('EURUSD reversals around NY overlap') ||
+      lesson.includes('Trading against daily trend on GBPUSD') ||
+      lesson.includes('USDJPY respects Asian session') ||
+      lesson.includes('Gold moves with violent expansion')
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function sanitizeIntScale1to10(val: unknown, fallback: number = 7): number {
@@ -292,9 +317,12 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       // Clean out any demo trades that were previously accidentally uploaded to Supabase
       const demoTradeIds = parsedDbTrades.filter((t) => isDemoTrade(t)).map((t) => t.id).filter(isValidUUID);
       if (demoTradeIds.length > 0) {
-        supabase.from('trades').delete().in('id', demoTradeIds).then(() => {
-          console.log('Purged accidental demo trades from Supabase');
-        });
+        try {
+          await supabase.from('trades').delete().in('id', demoTradeIds);
+          console.log(`Purged ${demoTradeIds.length} accidental demo trades from Supabase`);
+        } catch (e) {
+          console.warn('Error purging demo trades:', e);
+        }
       }
 
       const realDbTrades = parsedDbTrades.filter((t) => !isDemoTrade(t));
@@ -313,7 +341,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // 4. One-time initial migration ONLY when user first logs in AND Supabase is completely empty
+      // Check if user has explicitly cleared trades
       let wasClearedByUser = false;
       try {
         const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -323,6 +351,26 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {}
 
+      if (wasClearedByUser) {
+        // The user explicitly cleared their trades: delete any leftover rows from Supabase and keep state empty
+        if (uniqueDbTrades.length > 0) {
+          const idsToClean = uniqueDbTrades.map((t) => t.id).filter(isValidUUID);
+          if (idsToClean.length > 0) {
+            try {
+              await supabase.from('trades').delete().in('id', idsToClean);
+            } catch (e) {
+              console.warn('Error clearing leftover trades in Supabase:', e);
+            }
+          }
+        }
+        setTrades([]);
+        persistState([], currentAccounts, currentSetups, currentStrats, tags);
+        setIsDemoMode(false);
+        setSyncStatus('synced');
+        return;
+      }
+
+      // 4. One-time initial migration ONLY when user first logs in AND Supabase is completely empty
       if (isInitialLogin && uniqueDbTrades.length === 0 && !wasClearedByUser) {
         let localTrades: Trade[] = [];
         try {
@@ -401,7 +449,9 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       console.error('Supabase fetch error, retaining local state:', err);
       setSyncStatus('error');
       setSyncError(err?.message || 'Error de conexión');
-      loadLocalInitialState();
+      if (trades.length === 0) {
+        loadLocalInitialState();
+      }
     } finally {
       setIsLoading(false);
       setTimeout(() => {
@@ -412,11 +462,18 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
   // Force manual cloud sync
   const syncWithCloud = async () => {
-    if (!user) {
+    const supabase = createClient();
+    if (!supabase) {
       setSyncStatus('offline');
       return;
     }
-    await loadSupabaseData(user.id, false);
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    const activeUser = user || authUser;
+    if (!activeUser) {
+      setSyncStatus('offline');
+      return;
+    }
+    await loadSupabaseData(activeUser.id, false);
   };
 
   // Export & Import backup functions
@@ -545,6 +602,16 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     newTags = tags
   ) => {
     try {
+      let clearedByUser = false;
+      const prev = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (prev) {
+        try {
+          const parsed = JSON.parse(prev);
+          if (parsed.clearedByUser && newTrades.length === 0) {
+            clearedByUser = true;
+          }
+        } catch {}
+      }
       localStorage.setItem(
         LOCAL_STORAGE_KEY,
         JSON.stringify({
@@ -554,6 +621,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
           strategies: newStrats,
           tags: newTags,
           hasCustomData: true,
+          clearedByUser,
         })
       );
     } catch {
@@ -587,6 +655,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
   const clearAllTrades = async () => {
     isSyncingRef.current = true;
     setIsDemoMode(false);
+    const prevTrades = [...trades];
     setTrades([]);
     setSelectedTradeForDetail(null);
     try {
@@ -605,18 +674,27 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     } catch {}
 
     const supabase = createClient();
-    if (supabase && user) {
+    if (supabase) {
       try {
         setSyncStatus('syncing');
-        const { error } = await supabase.from('trades').delete().eq('user_id', user.id);
-        if (error) {
-          console.error('Error clearing trades in Supabase:', error);
-          setSyncError(error.message);
-        } else {
-          setSyncStatus('synced');
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        const effectiveUserId = user?.id || authUser?.id;
+
+        // 1. Delete all currently tracked trades by their explicit UUIDs
+        const idsToDelete = prevTrades.map((t) => t.id).filter(isValidUUID);
+        if (idsToDelete.length > 0) {
+          await supabase.from('trades').delete().in('id', idsToDelete);
         }
+
+        // 2. Delete all trades belonging to user in Supabase
+        if (effectiveUserId) {
+          await supabase.from('trades').delete().eq('user_id', effectiveUserId);
+        }
+
+        setSyncStatus('synced');
       } catch (err: any) {
         console.error('Error clearing trades in Supabase:', err);
+        setSyncError(err?.message || 'Error al vaciar trades');
       } finally {
         setTimeout(() => {
           isSyncingRef.current = false;
@@ -900,15 +978,22 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     }
 
     const supabase = createClient();
-    if (supabase && user) {
+    if (supabase) {
       try {
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        const effectiveUserId = user?.id || authUser?.id;
+
         if (isValidUUID(id)) {
-          await supabase.from('trades').delete().eq('id', id).eq('user_id', user.id);
-        } else if (target) {
+          if (effectiveUserId) {
+            await supabase.from('trades').delete().eq('id', id).eq('user_id', effectiveUserId);
+          } else {
+            await supabase.from('trades').delete().eq('id', id);
+          }
+        } else if (target && effectiveUserId) {
           await supabase
             .from('trades')
             .delete()
-            .eq('user_id', user.id)
+            .eq('user_id', effectiveUserId)
             .eq('symbol', target.symbol)
             .eq('date', target.date)
             .eq('entry_price', target.entry_price);
