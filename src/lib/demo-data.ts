@@ -107,6 +107,7 @@ function generateDemoTrades(): Trade[] {
         whatWentWrong: isWin ? 'Nothing, followed plan.' : 'Could have taken partials sooner.',
         lesson: 'New York session momentum continues to provide clean follow-through on BTCUSDT.'
       },
+      is_demo: true,
       created_at: d.toISOString(),
       updated_at: d.toISOString()
     });
@@ -165,6 +166,7 @@ function generateDemoTrades(): Trade[] {
         whatWentWrong: isBigLoss ? 'Risked too much right before major red folder news.' : 'None.',
         lesson: 'Do not trade EURUSD within 15 minutes of major central bank releases.'
       },
+      is_demo: true,
       created_at: d.toISOString(),
       updated_at: d.toISOString()
     });
@@ -222,6 +224,7 @@ function generateDemoTrades(): Trade[] {
         whatWentWrong: 'Fighting the dominant trend on GBPUSD.',
         lesson: 'Reversal setups on GBPUSD during London/NY overlap have very low win rates.'
       },
+      is_demo: true,
       created_at: d.toISOString(),
       updated_at: d.toISOString()
     });
@@ -279,6 +282,7 @@ function generateDemoTrades(): Trade[] {
         whatWentWrong: 'None.',
         lesson: 'Asian session momentum on USDJPY respects technical levels reliably.'
       },
+      is_demo: true,
       created_at: d.toISOString(),
       updated_at: d.toISOString()
     });
@@ -336,6 +340,7 @@ function generateDemoTrades(): Trade[] {
         whatWentWrong: isWin ? 'Could have trailed for runner.' : 'Exited slightly prematurely.',
         lesson: 'Gold requires wider breathing room on stops.'
       },
+      is_demo: true,
       created_at: d.toISOString(),
       updated_at: d.toISOString()
     });

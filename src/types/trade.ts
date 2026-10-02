@@ -94,6 +94,9 @@ export interface Trade {
   // Notes
   notes?: TradeNotes;
 
+  // Structural Isolation
+  is_demo?: boolean;
+
   created_at: string;
   updated_at: string;
 }

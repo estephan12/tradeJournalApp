@@ -40,41 +40,39 @@ describe('Sync & Persistence Safeguards', () => {
   });
 
   it('correctly isolates demo mock trades from real user trades', () => {
+    expect(isDemoTrade({ is_demo: true })).toBe(true);
+    expect(isDemoTrade({ user_id: 'demo-user' })).toBe(true);
+    expect(isDemoTrade({ account_id: 'acc-demo-1' })).toBe(true);
+    expect(isDemoTrade({ account_id: 'acc-demo-2' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-demo-1' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-01' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-036' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-btc-5' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-eur-12' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-gbp-3' })).toBe(true);
+    expect(isDemoTrade({ id: 'trade-jpy-2' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-usdjpy-2' })).toBe(true);
     expect(isDemoTrade({ id: 'trade-xau-8' })).toBe(true);
-    expect(isDemoTrade({ user_id: 'demo-user' })).toBe(true);
-    expect(isDemoTrade({ account_id: 'acc-demo-1' })).toBe(true);
 
-    // Real user trades must return false
-    expect(isDemoTrade({ id: 'da8fa828-991a-46a9-913f-0a4773f7d06a' })).toBe(false);
-    expect(isDemoTrade({ id: 'trade-1788560000000-xyz123' })).toBe(false);
-    expect(isDemoTrade({ id: 'trade-imp-1788560000000-xyz123' })).toBe(false);
+    // Real user trades must return false even if their notes contain words from demo templates
+    expect(isDemoTrade({ id: 'da8fa828-991a-46a9-913f-0a4773f7d06a', user_id: 'user-real-123' })).toBe(false);
+    expect(isDemoTrade({ id: 'trade-1788560000000-xyz123', user_id: 'user-real-123' })).toBe(false);
+    expect(isDemoTrade({ id: 'trade-imp-1788560000000-xyz123', user_id: 'user-real-123' })).toBe(false);
 
-    // Accidental demo trades uploaded to Supabase with real UUIDs must be recognized by thesis/lesson
     expect(
       isDemoTrade({
         id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+        user_id: 'user-real-123',
         notes: { tradeThesis: 'Clean daily breakout with rising volume during New York open.' },
       })
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isDemoTrade({
         id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
-        notes: { tradeThesis: 'London open liquidity run targeting previous day high/low.' },
-      })
-    ).toBe(true);
-    expect(
-      isDemoTrade({
-        id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+        user_id: 'user-real-123',
         notes: { lesson: 'Gold moves with violent expansion during NY morning. Respect initial stops.' },
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('parses Supabase trade row preserving notes, tags, and classification names', () => {
@@ -120,5 +118,37 @@ describe('Sync & Persistence Safeguards', () => {
     expect(parsed.strategy_name).toBe('Order Flow');
     expect(parsed.setup_name).toBe('Liquidity Grab');
     expect(parsed.notes?.tradeThesis).toBe('Clean higher low sweep');
+  });
+
+  it('guarantees that state persistence never injects destructive clearedByUser flags into storage', () => {
+    const serializedState = JSON.stringify({
+      trades: [],
+      accounts: [],
+      setups: [],
+      strategies: [],
+      tags: [],
+      hasCustomData: true,
+    });
+
+    const parsed = JSON.parse(serializedState);
+    expect(parsed.clearedByUser).toBeUndefined();
+    expect(parsed.hasCustomData).toBe(true);
+    expect(parsed.trades).toEqual([]);
+  });
+
+  it('ensures demo trade filtering is robust across custom assets and UUIDs', () => {
+    const customTrade = {
+      id: 'da8fa828-991a-46a9-913f-0a4773f7d06a',
+      user_id: 'user-authenticated-456',
+      symbol: 'SOLUSDT',
+      direction: 'LONG' as const,
+      entry_price: 150.0,
+      position_size: 10,
+      date: '2026-09-10',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    expect(isDemoTrade(customTrade)).toBe(false);
   });
 });
