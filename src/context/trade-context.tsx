@@ -24,6 +24,7 @@ import {
   calculateResult,
 } from '../lib/calculations';
 import { isSupabaseConfigured, createClient } from '../lib/supabase/client';
+import { syncService } from '../services/sync.service';
 import type { User } from '@supabase/supabase-js';
 
 interface TradeContextType {
@@ -187,6 +188,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     if (supabase) {
       await supabase.auth.signOut();
     }
+    syncService.unsubscribe(supabase);
     setUser(null);
     setIsDemoMode(true);
     setSyncStatus('offline');
@@ -479,43 +481,15 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    let realtimeChannel: any = null;
-    let realtimeDebounce: any = null;
-
-    const setupRealtime = (userId: string) => {
-      if (realtimeChannel) {
-        supabase.removeChannel(realtimeChannel);
-      }
-      realtimeChannel = supabase
-        .channel(`public:trades:${userId}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'trades',
-            filter: `user_id=eq.${userId}`,
-          },
-          (payload) => {
-            if (isSyncingRef.current) return;
-            if (realtimeDebounce) clearTimeout(realtimeDebounce);
-            realtimeDebounce = setTimeout(() => {
-              if (!isSyncingRef.current) {
-                loadSupabaseData(userId, false);
-              }
-            }, 600);
-          }
-        )
-        .subscribe();
-    };
-
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
         setIsDemoMode(false);
         setSyncStatus('synced');
         loadSupabaseData(session.user.id, true);
-        setupRealtime(session.user.id);
+        syncService.subscribeToUserTrades(supabase, session.user.id, () => {
+          loadSupabaseData(session.user.id, false);
+        });
       } else {
         loadLocalInitialState();
         setSyncStatus('offline');
@@ -531,25 +505,22 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         setSyncStatus('synced');
         if (event === 'SIGNED_IN') {
           loadSupabaseData(session.user.id, true);
-          setupRealtime(session.user.id);
+          syncService.subscribeToUserTrades(supabase, session.user.id, () => {
+            loadSupabaseData(session.user.id, false);
+          });
         }
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setIsDemoMode(true);
         setSyncStatus('offline');
-        if (realtimeChannel) {
-          supabase.removeChannel(realtimeChannel);
-          realtimeChannel = null;
-        }
+        syncService.unsubscribe(supabase);
         loadLocalInitialState();
       }
     });
 
     return () => {
       subscription.unsubscribe();
-      if (realtimeChannel) {
-        supabase.removeChannel(realtimeChannel);
-      }
+      syncService.unsubscribe(supabase);
     };
   }, []);
 
