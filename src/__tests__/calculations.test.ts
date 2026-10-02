@@ -2,14 +2,17 @@ import { describe, it, expect } from 'vitest';
 import {
   calculatePnL,
   calculateRiskAmount,
+  calculateRiskPercent,
   calculateRMultiple,
+  calculateProfitFactor,
   calculateResult,
   calculateTradeStatistics,
 } from '../lib/calculations';
+import { formatProfitFactor } from '../lib/utils';
 import { Trade } from '../types/trade';
 
-describe('TradeLab Calculation Engine', () => {
-  describe('calculatePnL', () => {
+describe('TradeLab Financial Calculation Engine', () => {
+  describe('calculatePnL with Multi-Asset support', () => {
     it('calculates long trade profit correctly minus commission and swap', () => {
       const pnl = calculatePnL({
         direction: 'LONG',
@@ -36,6 +39,20 @@ describe('TradeLab Calculation Engine', () => {
       expect(pnl).toBe(95);
     });
 
+    it('calculates multi-asset futures contract profit with multiplier', () => {
+      // E-mini S&P (ES): 50 multiplier per point
+      const pnl = calculatePnL({
+        direction: 'LONG',
+        entryPrice: 5000,
+        exitPrice: 5010,
+        positionSize: 2,
+        contractMultiplier: 50,
+        commission: 5,
+      });
+      // (5010 - 5000) * 2 * 50 = 1000 - 5 = 995
+      expect(pnl).toBe(995);
+    });
+
     it('returns null if exit price is missing', () => {
       const pnl = calculatePnL({
         direction: 'LONG',
@@ -46,15 +63,16 @@ describe('TradeLab Calculation Engine', () => {
     });
   });
 
-  describe('calculateRiskAmount & calculateRMultiple', () => {
-    it('calculates risk amount from stop loss distance', () => {
+  describe('calculateRiskAmount & Multiplier', () => {
+    it('calculates risk amount from stop loss distance and multiplier', () => {
       const risk = calculateRiskAmount({
         entryPrice: 100,
         stopLoss: 95,
         positionSize: 10,
+        contractMultiplier: 2,
       });
-      // 5 * 10 = 50
-      expect(risk).toBe(50);
+      // 5 * 10 * 2 = 100
+      expect(risk).toBe(100);
     });
 
     it('calculates positive and negative R-multiples', () => {
@@ -62,6 +80,42 @@ describe('TradeLab Calculation Engine', () => {
       expect(calculateRMultiple(-50, 50)).toBe(-1.00);
       expect(calculateRMultiple(null, 50)).toBeNull();
       expect(calculateRMultiple(100, 0)).toBeNull();
+    });
+  });
+
+  describe('calculateRiskPercent with dynamic account balance', () => {
+    it('calculates risk percent based on the real selected account balance', () => {
+      // $500 risk on a $50,000 account = 1.0%
+      expect(calculateRiskPercent(500, 50000)).toBe(1.0);
+      // $500 risk on a $100,000 account = 0.5%
+      expect(calculateRiskPercent(500, 100000)).toBe(0.5);
+      // $200 risk on a $5,000 account = 4.0%
+      expect(calculateRiskPercent(200, 5000)).toBe(4.0);
+    });
+
+    it('returns null when account balance or risk is non-positive or undefined', () => {
+      expect(calculateRiskPercent(null, 50000)).toBeNull();
+      expect(calculateRiskPercent(500, 0)).toBeNull();
+      expect(calculateRiskPercent(500, -10000)).toBeNull();
+      expect(calculateRiskPercent(500, undefined)).toBeNull();
+    });
+  });
+
+  describe('calculateProfitFactor & Zero-Loss Representation', () => {
+    it('returns Infinity when gross loss is 0 and gross profit > 0', () => {
+      expect(calculateProfitFactor(1500, 0)).toBe(Infinity);
+    });
+
+    it('returns null when there are no wins and no losses', () => {
+      expect(calculateProfitFactor(0, 0)).toBeNull();
+    });
+
+    it('formats profit factor gracefully into UI symbols', () => {
+      expect(formatProfitFactor(Infinity)).toBe('∞');
+      expect(formatProfitFactor(null)).toBe('N/A');
+      expect(formatProfitFactor(undefined)).toBe('N/A');
+      expect(formatProfitFactor(2.666)).toBe('2.67');
+      expect(formatProfitFactor(0.85)).toBe('0.85');
     });
   });
 
@@ -144,16 +198,24 @@ describe('TradeLab Calculation Engine', () => {
       expect(stats.netPnL).toBe(500); // 500 + 300 - 200 - 100 = 500
       expect(stats.grossProfit).toBe(800);
       expect(stats.grossLoss).toBe(300);
-      // Profit factor = 800 / 300 = 2.67
       expect(stats.profitFactor).toBe(2.67);
       expect(stats.averageWin).toBe(400); // 800 / 2
       expect(stats.averageLoss).toBe(150); // 300 / 2
-      // Expectancy = (0.5 * 400) - (0.5 * 150) = 200 - 75 = 125
       expect(stats.expectancy).toBe(125);
       expect(stats.maxWinStreak).toBe(2);
       expect(stats.maxLossStreak).toBe(2);
-      // Max drawdown: peaked at 10800, then dropped to 10600 (drawdown 200), then to 10500 (drawdown 300)
       expect(stats.maxDrawdownAmount).toBe(300);
+    });
+
+    it('handles zero-loss streak without NaN or crashing', () => {
+      const winningTradesOnly = mockTrades.slice(0, 2);
+      const stats = calculateTradeStatistics(winningTradesOnly, 50000);
+
+      expect(stats.wins).toBe(2);
+      expect(stats.losses).toBe(0);
+      expect(stats.winRate).toBe(100);
+      expect(stats.profitFactor).toBe(Infinity);
+      expect(stats.maxLossStreak).toBe(0);
     });
   });
 });

@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useTrades } from '@/context/trade-context';
 import { calculateTradeStatistics } from '@/lib/calculations';
-import { formatCurrency, formatPercent, formatR } from '@/lib/utils';
+import { formatCurrency, formatPercent, formatR, formatProfitFactor } from '@/lib/utils';
 import { DateSelector } from '@/components/dashboard/date-selector';
 import { KPICard } from '@/components/dashboard/kpi-card';
 import { PerformanceSummary } from '@/components/dashboard/performance-summary';
@@ -89,9 +89,17 @@ export default function DashboardPage() {
           {/* Profit Factor */}
           <KPICard
             label="Profit Factor"
-            value={stats.profitFactor.toFixed(2)}
+            value={formatProfitFactor(stats.profitFactor)}
             subValue="Gross Profit / Gross Loss"
-            variant={stats.profitFactor >= 1.5 ? 'positive' : stats.profitFactor < 1.0 ? 'negative' : 'default'}
+            variant={
+              stats.profitFactor === null
+                ? 'default'
+                : stats.profitFactor === Infinity || stats.profitFactor >= 1.5
+                ? 'positive'
+                : stats.profitFactor < 1.0
+                ? 'negative'
+                : 'default'
+            }
             icon={TrendingUp}
           />
 

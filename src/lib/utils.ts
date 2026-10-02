@@ -26,3 +26,9 @@ export function formatR(value: number | null | undefined): string {
   const sign = value < 0 ? "-" : value > 0 ? "+" : "";
   return `${sign}${Math.abs(value).toFixed(2)}R`;
 }
+
+export function formatProfitFactor(value: number | null | undefined): string {
+  if (value === null || value === undefined || isNaN(value)) return "N/A";
+  if (!isFinite(value)) return "∞";
+  return value.toFixed(2);
+}

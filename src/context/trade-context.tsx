@@ -629,12 +629,25 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     setSearchQuery('');
   };
 
-  // Helper to compute derived financial fields automatically
-  const computeDerivedFields = (data: Partial<Trade>, currentAccountBalance: number = 10000): Partial<Trade> => {
+  const getAccountBalanceForTrade = (accountId?: string | null): number => {
+    if (accountId) {
+      const acc = accounts.find((a) => a.id === accountId);
+      if (acc && acc.initial_balance > 0) {
+        return acc.initial_balance;
+      }
+    }
+    const defaultAcc = accounts.find((a) => a.is_default) || accounts[0];
+    return defaultAcc?.initial_balance && defaultAcc.initial_balance > 0 ? defaultAcc.initial_balance : 10000;
+  };
+
+  // Helper to compute derived financial fields automatically using exact account balance
+  const computeDerivedFields = (data: Partial<Trade>, explicitBalance?: number): Partial<Trade> => {
+    const balance = explicitBalance && explicitBalance > 0 ? explicitBalance : getAccountBalanceForTrade(data.account_id);
     const direction = data.direction || 'LONG';
     const entryPrice = Number(data.entry_price) || 0;
     const exitPrice = data.exit_price !== undefined && data.exit_price !== null ? Number(data.exit_price) : null;
     const positionSize = Number(data.position_size) || 1;
+    const contractMultiplier = Number(data.contract_multiplier) || 1;
     const stopLoss = data.stop_loss !== undefined && data.stop_loss !== null ? Number(data.stop_loss) : null;
     const commission = Number(data.commission) || 0;
     const swap = Number(data.swap) || 0;
@@ -647,6 +660,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
           entryPrice,
           exitPrice,
           positionSize,
+          contractMultiplier,
           commission,
           swap,
         });
@@ -655,14 +669,15 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       entryPrice,
       stopLoss,
       positionSize,
+      contractMultiplier,
     });
 
-    const riskPercent = calculateRiskPercent(riskAmount, currentAccountBalance);
+    const riskPercent = calculateRiskPercent(riskAmount, balance);
     const rMultiple = calculateRMultiple(pnl, riskAmount);
     const result = calculateResult(pnl);
 
-    const pnlPercent = pnl !== null && currentAccountBalance > 0
-      ? Number(((pnl / currentAccountBalance) * 100).toFixed(2))
+    const pnlPercent = pnl !== null && balance > 0
+      ? Number(((pnl / balance) * 100).toFixed(2))
       : null;
 
     return {
@@ -678,7 +693,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
   // Add Single Trade
   const addTrade = async (tradeData: Partial<Trade>): Promise<Trade> => {
-    const computed = computeDerivedFields(tradeData);
+    const accountBalance = getAccountBalanceForTrade(tradeData.account_id);
+    const computed = computeDerivedFields(tradeData, accountBalance);
     const newTrade: Trade = {
       id: `trade-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
       user_id: user?.id || 'user-default',
@@ -800,7 +816,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     if (!existing) throw new Error('Trade not found');
 
     const merged = { ...existing, ...tradeData };
-    const computed = computeDerivedFields(merged);
+    const accountBalance = getAccountBalanceForTrade(merged.account_id);
+    const computed = computeDerivedFields(merged, accountBalance);
 
     const updatedTrade: Trade = {
       ...merged,
@@ -940,7 +957,8 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     );
 
     for (const raw of newTrades) {
-      const computed = computeDerivedFields(raw);
+      const accountBalance = getAccountBalanceForTrade(raw.account_id);
+      const computed = computeDerivedFields(raw, accountBalance);
       const symbol = (computed.symbol || '').toUpperCase().trim();
       const key = `${symbol}|${computed.direction}|${computed.date}|${computed.entry_price}|${computed.exit_price}|${computed.pnl}`;
 

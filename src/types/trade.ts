@@ -34,6 +34,16 @@ export type TradeMistake =
   | 'Chased Price'
   | 'None';
 
+export type AssetClass =
+  | 'stock'
+  | 'crypto'
+  | 'forex'
+  | 'future'
+  | 'option'
+  | 'index'
+  | 'cfd'
+  | 'other';
+
 export interface TradeNotes {
   tradeThesis?: string;
   whatHappened?: string;
@@ -53,9 +63,13 @@ export interface Trade {
   entry_time?: string | null; // HH:mm:ss or HH:mm
   exit_time?: string | null;
 
-  // Market
+  // Market & Multi-Asset
   symbol: string;
   direction: TradeDirection;
+  asset_class?: AssetClass | string | null;
+  contract_multiplier?: number | null;
+  tick_size?: number | null;
+  tick_value?: number | null;
   timeframe?: string | null;
   session?: TradingSession | string | null;
 

@@ -2,13 +2,14 @@ import { Trade, TradeDirection, TradeResult } from '@/types/trade';
 
 /**
  * Calculates net profit and loss from trade execution parameters.
- * Automatically deducts commission and swap.
+ * Automatically accounts for contract multiplier, commission and swap.
  */
 export function calculatePnL({
   direction,
   entryPrice,
   exitPrice,
   positionSize,
+  contractMultiplier = 1,
   commission = 0,
   swap = 0,
 }: {
@@ -16,6 +17,7 @@ export function calculatePnL({
   entryPrice: number;
   exitPrice?: number | null;
   positionSize: number;
+  contractMultiplier?: number;
   commission?: number;
   swap?: number;
 }): number | null {
@@ -23,11 +25,12 @@ export function calculatePnL({
     return null;
   }
 
+  const multiplier = contractMultiplier && contractMultiplier > 0 ? contractMultiplier : 1;
   let grossPnL = 0;
   if (direction === 'LONG') {
-    grossPnL = (exitPrice - entryPrice) * positionSize;
+    grossPnL = (exitPrice - entryPrice) * positionSize * multiplier;
   } else {
-    grossPnL = (entryPrice - exitPrice) * positionSize;
+    grossPnL = (entryPrice - exitPrice) * positionSize * multiplier;
   }
 
   const netPnL = grossPnL - (commission || 0) - (swap || 0);
@@ -35,29 +38,34 @@ export function calculatePnL({
 }
 
 /**
- * Calculates monetary risk based on entry price and stop loss.
+ * Calculates monetary risk based on entry price, stop loss, position size, and contract multiplier.
  */
 export function calculateRiskAmount({
   entryPrice,
   stopLoss,
   positionSize,
+  contractMultiplier = 1,
 }: {
   entryPrice: number;
   stopLoss?: number | null;
   positionSize: number;
+  contractMultiplier?: number;
 }): number | null {
   if (stopLoss === undefined || stopLoss === null || isNaN(stopLoss)) {
     return null;
   }
-  const risk = Math.abs(entryPrice - stopLoss) * positionSize;
+  const multiplier = contractMultiplier && contractMultiplier > 0 ? contractMultiplier : 1;
+  const risk = Math.abs(entryPrice - stopLoss) * positionSize * multiplier;
   return Number(risk.toFixed(2));
 }
 
 /**
- * Calculates risk percentage of account balance.
+ * Calculates risk percentage of account balance without arbitrary fallbacks.
  */
-export function calculateRiskPercent(riskAmount: number | null, accountBalance: number = 10000): number | null {
-  if (!riskAmount || accountBalance <= 0) return null;
+export function calculateRiskPercent(riskAmount: number | null, accountBalance?: number | null): number | null {
+  if (riskAmount === null || riskAmount === undefined || !accountBalance || accountBalance <= 0) {
+    return null;
+  }
   return Number(((riskAmount / accountBalance) * 100).toFixed(2));
 }
 
@@ -69,6 +77,20 @@ export function calculateRMultiple(pnl: number | null, riskAmount: number | null
     return null;
   }
   return Number((pnl / riskAmount).toFixed(2));
+}
+
+/**
+ * Calculates Profit Factor without fake 99.99 caps on zero loss.
+ * Returns Infinity for pure winning sample, null for empty sample, or finite float.
+ */
+export function calculateProfitFactor(grossProfit: number, grossLoss: number): number | null {
+  const profit = Math.max(0, grossProfit || 0);
+  const loss = Math.abs(grossLoss || 0);
+
+  if (loss === 0) {
+    return profit > 0 ? Infinity : null;
+  }
+  return Number((profit / loss).toFixed(2));
 }
 
 /**
@@ -100,7 +122,7 @@ export function calculateTradeStatistics(trades: Trade[], initialBalance: number
       netPnL: 0,
       grossProfit: 0,
       grossLoss: 0,
-      profitFactor: 0,
+      profitFactor: null as number | null,
       averageWin: 0,
       averageLoss: 0,
       expectancy: 0,
@@ -143,13 +165,8 @@ export function calculateTradeStatistics(trades: Trade[], initialBalance: number
   const lossRate = Number(((losses / totalTrades) * 100).toFixed(1));
   const netPnL = Number((grossProfit - grossLoss).toFixed(2));
   
-  // Profit factor calculation
-  let profitFactor = 0;
-  if (grossLoss === 0) {
-    profitFactor = grossProfit > 0 ? 99.99 : 0;
-  } else {
-    profitFactor = Number((grossProfit / grossLoss).toFixed(2));
-  }
+  // Profit factor calculation using pure helper
+  const profitFactor = calculateProfitFactor(grossProfit, grossLoss);
 
   const averageWin = wins > 0 ? Number((grossProfit / wins).toFixed(2)) : 0;
   const averageLoss = losses > 0 ? Number((grossLoss / losses).toFixed(2)) : 0;

@@ -2,6 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { Trade } from '@/types/trade';
+import { calculateProfitFactor } from '@/lib/calculations';
 import { formatCurrency, formatPercent } from '@/lib/utils';
 import { Award, AlertTriangle, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
@@ -14,7 +15,7 @@ interface GroupStat {
   tradesCount: number;
   netPnL: number;
   winRate: number;
-  profitFactor: number;
+  profitFactor: number | null;
 }
 
 export function PerformanceSummary({ trades }: PerformanceSummaryProps) {
@@ -46,7 +47,7 @@ export function PerformanceSummary({ trades }: PerformanceSummaryProps) {
         tradesCount: data.trades,
         netPnL: Number(data.pnl.toFixed(2)),
         winRate: Number(((data.wins / data.trades) * 100).toFixed(1)),
-        profitFactor: data.grossLoss > 0 ? Number((data.grossProfit / data.grossLoss).toFixed(2)) : data.grossProfit > 0 ? 99.9 : 0,
+        profitFactor: calculateProfitFactor(data.grossProfit, data.grossLoss),
       }));
     };
 
