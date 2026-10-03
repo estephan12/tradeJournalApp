@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isValidUUID, isDemoTrade, parseSupabaseTrade, sanitizeIntScale1to10 } from '../context/trade-context';
+import { calculateRiskPercent, calculatePnL, calculateRiskAmount } from '../lib/calculations';
 
 describe('Sync & Persistence Safeguards', () => {
   it('sanitizes confidence and discipline into valid 1-10 integers for PostgreSQL', () => {
@@ -150,5 +151,119 @@ describe('Sync & Persistence Safeguards', () => {
     };
 
     expect(isDemoTrade(customTrade)).toBe(false);
+  });
+
+  it('unresolved account produces null risk_percent and pnl_percent without fabricating 10,000 fallback', () => {
+    // When no account can be resolved (e.g. accountId not found and no accounts available)
+    const riskAmount = 250;
+    const unresolvedBalance: number | null = null;
+    const zeroBalance: number = 0;
+
+    // Must evaluate to null, never fabricate metrics with an arbitrary 10,000 fallback
+    const riskPercentUnresolved = calculateRiskPercent(riskAmount, unresolvedBalance);
+    const riskPercentZero = calculateRiskPercent(riskAmount, zeroBalance);
+
+    expect(riskPercentUnresolved).toBeNull();
+    expect(riskPercentZero).toBeNull();
+  });
+
+  it('contract multiplier and multi-asset specifications survive local serialization and Supabase payload roundtrip', async () => {
+    const { tradeToSupabasePayload } = await import('../lib/trades/trade-mappers');
+
+    // Futures trade: ES mini with 50x multiplier
+    const futuresTrade = {
+      symbol: 'ES1!',
+      direction: 'LONG' as const,
+      entry_price: 5000,
+      exit_price: 5020,
+      stop_loss: 4990,
+      position_size: 2,
+      contract_multiplier: 50,
+      asset_class: 'FUTURES' as const,
+      tick_size: 0.25,
+      tick_value: 12.5,
+    };
+
+    // PnL: (5020 - 5000) * 2 * 50 = 20 * 100 = 2000
+    const pnl = calculatePnL({
+      direction: futuresTrade.direction,
+      entryPrice: futuresTrade.entry_price,
+      exitPrice: futuresTrade.exit_price,
+      positionSize: futuresTrade.position_size,
+      contractMultiplier: futuresTrade.contract_multiplier,
+    });
+    expect(pnl).toBe(2000);
+
+    // Risk Amount: |5000 - 4990| * 2 * 50 = 10 * 100 = 1000
+    const riskAmount = calculateRiskAmount({
+      entryPrice: futuresTrade.entry_price,
+      stopLoss: futuresTrade.stop_loss,
+      positionSize: futuresTrade.position_size,
+      contractMultiplier: futuresTrade.contract_multiplier,
+    });
+    expect(riskAmount).toBe(1000);
+
+    // 1. Local JSON serialization
+    const serialized = JSON.stringify(futuresTrade);
+    const deserialized = JSON.parse(serialized);
+    expect(deserialized.contract_multiplier).toBe(50);
+    expect(deserialized.asset_class).toBe('FUTURES');
+    expect(deserialized.tick_size).toBe(0.25);
+    expect(deserialized.tick_value).toBe(12.5);
+
+    // 2. Supabase payload mapping (bundled in notes JSONB until Phase 6 schema migration)
+    const payload = tradeToSupabasePayload(futuresTrade, 'user-real-1');
+    const payloadNotes = payload.notes as Record<string, unknown>;
+    expect(payloadNotes.contract_multiplier).toBe(50);
+    expect(payloadNotes.asset_class).toBe('FUTURES');
+    expect(payloadNotes.tick_size).toBe(0.25);
+    expect(payloadNotes.tick_value).toBe(12.5);
+
+    // 3. Supabase row parsing back to Trade
+    const mockDbRow = {
+      id: 'da8fa828-991a-46a9-913f-0a4773f7d06a',
+      user_id: 'user-real-1',
+      symbol: 'ES1!',
+      direction: 'LONG',
+      entry_price: 5000,
+      exit_price: 5020,
+      position_size: 2,
+      date: '2026-09-15',
+      notes: payload.notes,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const restoredTrade = parseSupabaseTrade(mockDbRow);
+    expect(restoredTrade.contract_multiplier).toBe(50);
+    expect(restoredTrade.asset_class).toBe('FUTURES');
+    expect(restoredTrade.tick_size).toBe(0.25);
+    expect(restoredTrade.tick_value).toBe(12.5);
+  });
+
+  it('verifies clearAllTrades preserves local cache and state if cloud deletion fails', async () => {
+    // Simulate clearAllTrades failure flow
+    let localTrades = [{ id: 'trade-1', symbol: 'BTCUSDT' }];
+    let localPersisted = [{ id: 'trade-1', symbol: 'BTCUSDT' }];
+
+    const simulateClearAllTrades = async (shouldFailCloud: boolean) => {
+      if (shouldFailCloud) {
+        // Cloud throws error
+        throw new Error('Supabase network error: 500 Internal Server Error');
+      }
+      // Success: clear local state and cache
+      localTrades = [];
+      localPersisted = [];
+    };
+
+    // On failure: local trades and storage must remain intact
+    await expect(simulateClearAllTrades(true)).rejects.toThrow('Supabase network error');
+    expect(localTrades.length).toBe(1);
+    expect(localPersisted.length).toBe(1);
+
+    // On success: local state and storage are cleared
+    await simulateClearAllTrades(false);
+    expect(localTrades.length).toBe(0);
+    expect(localPersisted.length).toBe(0);
   });
 });

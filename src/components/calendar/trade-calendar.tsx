@@ -59,27 +59,25 @@ export function TradeCalendar() {
   const monthName = currentDate.toLocaleString('en-US', { month: 'long' });
 
   // Compute monthly stats
-  const monthlyStats = useMemo(() => {
-    let monthTrades = 0;
-    let monthPnL = 0;
-    let winCount = 0;
+  let monthTrades = 0;
+  let monthPnL = 0;
+  let winCount = 0;
 
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const entry = tradesByDay.get(dateKey);
-      if (entry) {
-        monthTrades += entry.count;
-        monthPnL += entry.netPnL;
-        winCount += entry.trades.filter((t) => (t.pnl || 0) > 0).length;
-      }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const entry = tradesByDay.get(dateKey);
+    if (entry) {
+      monthTrades += entry.count;
+      monthPnL += entry.netPnL;
+      winCount += entry.trades.filter((t) => (t.pnl || 0) > 0).length;
     }
+  }
 
-    return {
-      trades: monthTrades,
-      pnl: Number(monthPnL.toFixed(2)),
-      winRate: monthTrades > 0 ? Number(((winCount / monthTrades) * 100).toFixed(1)) : 0,
-    };
-  }, [year, month, daysInMonth, tradesByDay]);
+  const monthlyStats = {
+    trades: monthTrades,
+    pnl: Number(monthPnL.toFixed(2)),
+    winRate: monthTrades > 0 ? Number(((winCount / monthTrades) * 100).toFixed(1)) : 0,
+  };
 
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 

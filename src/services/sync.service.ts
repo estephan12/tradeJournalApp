@@ -1,6 +1,7 @@
 import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { Trade, Account, Setup, Strategy, Tag } from '../types/trade';
-import { isValidUUID, isDemoTrade } from '../context/trade-context';
+import { isValidUUID } from '../lib/trades/trade-validation';
+import { isDemoTrade } from '../lib/demo/demo-utils';
 
 export interface SyncServiceState {
   trades: Trade[];

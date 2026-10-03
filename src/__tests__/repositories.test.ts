@@ -6,8 +6,20 @@ import { SetupRepository } from '../repositories/setup.repository';
 import { TagRepository } from '../repositories/tag.repository';
 import { AuthRepository } from '../repositories/auth.repository';
 
+import { SupabaseClient } from '@supabase/supabase-js';
+
+interface MockSupabase {
+  from: ReturnType<typeof vi.fn>;
+  auth: {
+    getSession: ReturnType<typeof vi.fn>;
+    getUser: ReturnType<typeof vi.fn>;
+    signOut: ReturnType<typeof vi.fn>;
+  };
+}
+
 describe('Repository Layer Unit Tests', () => {
-  let mockSupabase: any;
+  let mockSupabase: MockSupabase;
+  let mockClient: SupabaseClient;
 
   beforeEach(() => {
     mockSupabase = {
@@ -18,6 +30,7 @@ describe('Repository Layer Unit Tests', () => {
         signOut: vi.fn(),
       },
     };
+    mockClient = mockSupabase as unknown as SupabaseClient;
   });
 
   describe('TradeRepository', () => {
@@ -26,7 +39,7 @@ describe('Repository Layer Unit Tests', () => {
       const trades = await repoWithoutClient.getTrades('user-1');
       expect(trades).toEqual([]);
 
-      const repoWithClient = new TradeRepository(mockSupabase);
+      const repoWithClient = new TradeRepository(mockClient);
       const emptyUserTrades = await repoWithClient.getTrades('');
       expect(emptyUserTrades).toEqual([]);
     });
@@ -58,7 +71,7 @@ describe('Repository Layer Unit Tests', () => {
 
       mockSupabase.from.mockReturnValue({ select: selectMock });
 
-      const repo = new TradeRepository(mockSupabase);
+      const repo = new TradeRepository(mockClient);
       const trades = await repo.getTrades('user-1');
 
       expect(mockSupabase.from).toHaveBeenCalledWith('trades');
@@ -89,7 +102,7 @@ describe('Repository Layer Unit Tests', () => {
 
       mockSupabase.from.mockReturnValue({ insert: insertMock });
 
-      const repo = new TradeRepository(mockSupabase);
+      const repo = new TradeRepository(mockClient);
       const created = await repo.createTrade(
         { symbol: 'ETHUSDT', direction: 'SHORT', entry_price: 2500, position_size: 2 },
         'user-1'
@@ -106,11 +119,52 @@ describe('Repository Layer Unit Tests', () => {
         delete: vi.fn().mockReturnValue({ eq: deleteEqIdMock }),
       });
 
-      const repo = new TradeRepository(mockSupabase);
+      const repo = new TradeRepository(mockClient);
       await repo.deleteTrade('da8fa828-991a-46a9-913f-0a4773f7d06a', 'user-1');
 
       expect(mockSupabase.from).toHaveBeenCalledWith('trades');
       expect(deleteEqIdMock).toHaveBeenCalledWith('id', 'da8fa828-991a-46a9-913f-0a4773f7d06a');
+      expect(deleteEqUserMock).toHaveBeenCalledWith('user_id', 'user-1');
+    });
+
+    it('strictly ignores non-UUID trade deletions to prevent destructive database operations', async () => {
+      const repo = new TradeRepository(mockClient);
+      await repo.deleteTrade('trade-temp-12345', 'user-1');
+      await repo.deleteTrade('invalid-id', 'user-1');
+
+      expect(mockSupabase.from).not.toHaveBeenCalled();
+    });
+
+    it('deletes multiple trades filtering strictly for valid UUIDs', async () => {
+      const deleteInMock = vi.fn().mockResolvedValue({ error: null });
+      mockSupabase.from.mockReturnValue({
+        delete: vi.fn().mockReturnValue({ in: deleteInMock }),
+      });
+
+      const repo = new TradeRepository(mockClient);
+      await repo.deleteTrades([
+        'da8fa828-991a-46a9-913f-0a4773f7d06a',
+        'trade-non-uuid',
+        '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+      ]);
+
+      expect(mockSupabase.from).toHaveBeenCalledWith('trades');
+      expect(deleteInMock).toHaveBeenCalledWith('id', [
+        'da8fa828-991a-46a9-913f-0a4773f7d06a',
+        '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+      ]);
+    });
+
+    it('deletes all trades for a given user', async () => {
+      const deleteEqUserMock = vi.fn().mockResolvedValue({ error: null });
+      mockSupabase.from.mockReturnValue({
+        delete: vi.fn().mockReturnValue({ eq: deleteEqUserMock }),
+      });
+
+      const repo = new TradeRepository(mockClient);
+      await repo.deleteAllTrades('user-1');
+
+      expect(mockSupabase.from).toHaveBeenCalledWith('trades');
       expect(deleteEqUserMock).toHaveBeenCalledWith('user_id', 'user-1');
     });
   });
@@ -137,7 +191,7 @@ describe('Repository Layer Unit Tests', () => {
         }),
       });
 
-      const repo = new AccountRepository(mockSupabase);
+      const repo = new AccountRepository(mockClient);
       const accounts = await repo.getAccounts('user-1');
 
       expect(accounts.length).toBe(1);
@@ -164,7 +218,7 @@ describe('Repository Layer Unit Tests', () => {
         }),
       });
 
-      const repo = new AccountRepository(mockSupabase);
+      const repo = new AccountRepository(mockClient);
       const res = await repo.createAccount(
         { name: 'Futures 100k', initial_balance: 100000, currency: 'USD' },
         'user-1'
@@ -177,9 +231,9 @@ describe('Repository Layer Unit Tests', () => {
 
   describe('Strategy, Setup & Tag Repositories', () => {
     it('creates strategies, setups, and tags correctly', async () => {
-      const stratRepo = new StrategyRepository(mockSupabase);
-      const setupRepo = new SetupRepository(mockSupabase);
-      const tagRepo = new TagRepository(mockSupabase);
+      const stratRepo = new StrategyRepository(mockClient);
+      const setupRepo = new SetupRepository(mockClient);
+      const tagRepo = new TagRepository(mockClient);
 
       mockSupabase.from.mockReturnValue({
         insert: vi.fn().mockReturnValue({
@@ -212,12 +266,33 @@ describe('Repository Layer Unit Tests', () => {
         error: null,
       });
 
-      const authRepo = new AuthRepository(mockSupabase);
+      const authRepo = new AuthRepository(mockClient);
       const session = await authRepo.getSession();
       const user = await authRepo.getCurrentUser();
 
       expect(session?.access_token).toBe('token-123');
       expect(user?.email).toBe('trader@example.com');
+    });
+  });
+
+  describe('Architectural Dependency Direction', () => {
+    it('verifies that no repositories or services import from trade-context', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+
+      const dirsToAudit = [
+        path.resolve(process.cwd(), 'src/repositories'),
+        path.resolve(process.cwd(), 'src/services'),
+      ];
+
+      for (const dir of dirsToAudit) {
+        if (!fs.existsSync(dir)) continue;
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'));
+        for (const file of files) {
+          const content = fs.readFileSync(path.join(dir, file), 'utf-8');
+          expect(content).not.toContain('trade-context');
+        }
+      }
     });
   });
 });

@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { SyncService, syncService } from '../services/sync.service';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { syncService } from '../services/sync.service';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { Trade } from '../types/trade';
 
 describe('SyncService & Realtime Architecture', () => {
@@ -179,5 +180,50 @@ describe('SyncService & Realtime Architecture', () => {
     expect(currentTrades.length).toBe(1);
     expect(currentTrades[0].symbol).toBe('EURUSD');
     expect(currentTrades[0].user_id).toBe('user-b-2222');
+  });
+
+  it('suppresses reload loops during local create, update, and delete mutations, but triggers on remote change', async () => {
+    let postgresChangeCallback: (() => void) | null = null;
+    const mockChannel = {
+      on: vi.fn((_event, _config, cb) => {
+        postgresChangeCallback = cb;
+        return mockChannel;
+      }),
+      subscribe: vi.fn().mockReturnThis(),
+      unsubscribe: vi.fn(),
+    };
+    const mockClient = {
+      channel: vi.fn().mockReturnValue(mockChannel),
+      removeChannel: vi.fn(),
+    } as unknown as SupabaseClient;
+
+    const onRemoteChange = vi.fn();
+    syncService.subscribeToUserTrades(mockClient, 'user-123', onRemoteChange, 20);
+
+    expect(postgresChangeCallback).not.toBeNull();
+
+    // 1. Local Create: set mutation lock -> realtime event triggered -> onRemoteChange must NOT be called
+    syncService.setLocalMutationLock(true, 100);
+    postgresChangeCallback!();
+    await new Promise((r) => setTimeout(r, 35));
+    expect(onRemoteChange).not.toHaveBeenCalled();
+
+    // 2. Local Update: mutation lock active -> realtime event triggered -> onRemoteChange must NOT be called
+    postgresChangeCallback!();
+    await new Promise((r) => setTimeout(r, 35));
+    expect(onRemoteChange).not.toHaveBeenCalled();
+
+    // 3. Local Delete: mutation lock active -> realtime event triggered -> onRemoteChange must NOT be called
+    postgresChangeCallback!();
+    await new Promise((r) => setTimeout(r, 35));
+    expect(onRemoteChange).not.toHaveBeenCalled();
+
+    // 4. Remote Change: mutation lock expires -> remote change fires -> onRemoteChange IS called
+    await new Promise((r) => setTimeout(r, 80)); // wait for lock expiry
+    expect(syncService.getIsMutatingLocally()).toBe(false);
+
+    postgresChangeCallback!();
+    await new Promise((r) => setTimeout(r, 50)); // wait for debounce
+    expect(onRemoteChange).toHaveBeenCalledTimes(1);
   });
 });

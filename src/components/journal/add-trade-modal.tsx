@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { X, Check, Calculator, Sparkles, AlertCircle } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { X, Check, Calculator, AlertCircle } from 'lucide-react';
 import { useTrades } from '@/context/trade-context';
 import { TradeDirection, TradeEmotion, TradeMistake, TradingSession } from '@/types/trade';
 import { calculatePnL, calculateRiskAmount, calculateRMultiple, calculateResult } from '@/lib/calculations';
@@ -88,18 +88,9 @@ export function AddTradeModal() {
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Initialize account and setup when opened
-  useEffect(() => {
-    if (accounts.length > 0 && !accountId) {
-      setAccountId(accounts[0].id);
-    }
-    if (setups.length > 0 && !setupId) {
-      setSetupId(setups[0].id);
-    }
-    if (strategies.length > 0 && !strategyId) {
-      setStrategyId(strategies[0].id);
-    }
-  }, [accounts, setups, strategies, accountId, setupId, strategyId]);
+  const effectiveAccountId = accountId || accounts[0]?.id || '';
+  const effectiveStrategyId = strategyId || strategies[0]?.id || '';
+  const effectiveSetupId = setupId || setups[0]?.id || '';
 
   // Live Automatic Calculations Preview
   const liveCalc = useMemo(() => {
@@ -154,7 +145,7 @@ export function AddTradeModal() {
     try {
       setIsSubmitting(true);
       await addTrade({
-        account_id: accountId,
+        account_id: effectiveAccountId,
         symbol: symbol.toUpperCase().trim(),
         direction,
         date,
@@ -169,8 +160,8 @@ export function AddTradeModal() {
         position_size: size,
         commission: parseFloat(commission) || 0,
         swap: parseFloat(swap) || 0,
-        strategy_id: strategyId || null,
-        setup_id: setupId || null,
+        strategy_id: effectiveStrategyId || null,
+        setup_id: effectiveSetupId || null,
         tags: selectedTags,
         emotion,
         confidence,
@@ -310,7 +301,7 @@ export function AddTradeModal() {
               <div>
                 <label className="block text-[11px] text-[#8B98A8] mb-1">Account</label>
                 <select
-                  value={accountId}
+                  value={effectiveAccountId}
                   onChange={(e) => setAccountId(e.target.value)}
                   className="w-full h-8 px-2.5 rounded bg-[#0B0F14] border border-[#26313D] text-xs text-[#F5F7FA] focus:outline-none focus:border-[#38BDF8]"
                 >
@@ -529,7 +520,7 @@ export function AddTradeModal() {
               <div>
                 <label className="block text-[11px] text-[#8B98A8] mb-1">Strategy</label>
                 <select
-                  value={strategyId}
+                  value={effectiveStrategyId}
                   onChange={(e) => setStrategyId(e.target.value)}
                   className="w-full h-8 px-2.5 rounded bg-[#0B0F14] border border-[#26313D] text-xs text-[#F5F7FA] focus:outline-none focus:border-[#38BDF8]"
                 >
@@ -545,7 +536,7 @@ export function AddTradeModal() {
               <div>
                 <label className="block text-[11px] text-[#8B98A8] mb-1">Setup</label>
                 <select
-                  value={setupId}
+                  value={effectiveSetupId}
                   onChange={(e) => setSetupId(e.target.value)}
                   className="w-full h-8 px-2.5 rounded bg-[#0B0F14] border border-[#26313D] text-xs text-[#F5F7FA] focus:outline-none focus:border-[#38BDF8]"
                 >
