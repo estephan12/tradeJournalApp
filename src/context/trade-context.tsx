@@ -31,13 +31,13 @@ import { SetupRepository } from '../repositories/setup.repository';
 import { StrategyRepository } from '../repositories/strategy.repository';
 import { TagRepository } from '../repositories/tag.repository';
 import { AuthRepository } from '../repositories/auth.repository';
-import { isValidUUID, sanitizeIntScale1to10 } from '../lib/trades/trade-validation';
+import { isValidUUID, sanitizeIntScale1to10, normalizeAssetClass } from '../lib/trades/trade-validation';
 import { isDemoTrade } from '../lib/demo/demo-utils';
 import { parseSupabaseTrade } from '../lib/trades/trade-mappers';
 import type { User } from '@supabase/supabase-js';
 
 // Re-export helpers for backwards compatibility
-export { isValidUUID, sanitizeIntScale1to10, isDemoTrade, parseSupabaseTrade };
+export { isValidUUID, sanitizeIntScale1to10, normalizeAssetClass, isDemoTrade, parseSupabaseTrade };
 
 interface TradeContextType {
   trades: Trade[];
@@ -278,7 +278,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       const demoTradeIds = parsedDbTrades.filter((t) => isDemoTrade(t)).map((t) => t.id).filter(isValidUUID);
       if (demoTradeIds.length > 0) {
         try {
-          await tradeRepo.deleteTrades(demoTradeIds);
+          await tradeRepo.deleteTrades(demoTradeIds, userId);
           console.log(`Purged ${demoTradeIds.length} accidental demo trades from Supabase`);
         } catch (e) {
           console.warn('Error purging demo trades:', e);
@@ -485,18 +485,17 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
   };
 
   const clearAllTrades = async () => {
-    syncService.setLocalMutationLock(true, 1500);
-
     if (user) {
       setSyncStatus('syncing');
       try {
-        await tradeRepo.deleteAllTrades(user.id);
+        await syncService.withLocalMutation(() => tradeRepo.deleteAllTrades(user.id));
         // Confirmed cloud deletion succeeded: now safely clear application and cache state
         setIsDemoMode(false);
         setTrades([]);
         setSelectedTradeForDetail(null);
         persistState([]);
         setSyncStatus('synced');
+        setSyncError(null);
       } catch (err: unknown) {
         const errorMsg = err instanceof Error ? err.message : 'Error al vaciar trades en la nube';
         console.error('Error clearing trades in Supabase via repository:', err);
@@ -610,8 +609,6 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
   // Add Single Trade
   const addTrade = async (tradeData: Partial<Trade>): Promise<Trade> => {
-    syncService.setLocalMutationLock(true, 1500);
-
     const accountBalance = getAccountBalanceForTrade(tradeData.account_id);
     const computed = computeDerivedFields(tradeData, accountBalance);
     let newTrade: Trade = {
@@ -632,7 +629,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       take_profit: computed.take_profit !== undefined && computed.take_profit !== null ? Number(computed.take_profit) : null,
       position_size: Number(computed.position_size) || 1,
       contract_multiplier: Number(computed.contract_multiplier) || 1,
-      asset_class: computed.asset_class || 'CRYPTO',
+      asset_class: normalizeAssetClass(computed.asset_class || 'crypto'),
       tick_size: computed.tick_size,
       tick_value: computed.tick_value,
       risk_amount: computed.risk_amount,
@@ -659,19 +656,24 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
     if (supabase && user) {
       try {
-        const persisted = await tradeRepo.createTrade(
-          newTrade,
-          user.id,
-          accounts,
-          setups,
-          strategies
+        const persisted = await syncService.withLocalMutation(() =>
+          tradeRepo.createTrade(
+            newTrade,
+            user.id,
+            accounts,
+            setups,
+            strategies
+          )
         );
         newTrade = persisted;
         setSyncStatus('synced');
+        setSyncError(null);
       } catch (err: unknown) {
         console.error('Failed to create trade via TradeRepository:', err);
         const errorMsg = err instanceof Error ? err.message : 'Error al guardar trade';
+        setSyncStatus('error');
         setSyncError(errorMsg);
+        throw err;
       }
     }
 
@@ -690,8 +692,6 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
   // Update Trade
   const updateTrade = async (id: string, tradeData: Partial<Trade>): Promise<Trade> => {
-    syncService.setLocalMutationLock(true, 1500);
-
     const existing = trades.find((t) => t.id === id);
     if (!existing) throw new Error('Trade not found');
 
@@ -702,6 +702,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     let updatedTrade: Trade = {
       ...merged,
       ...computed,
+      asset_class: merged.asset_class ? normalizeAssetClass(merged.asset_class) : undefined,
       strategy_name: strategies.find((s) => s.id === computed.strategy_id)?.name || merged.strategy_name,
       setup_name: setups.find((s) => s.id === computed.setup_id)?.name || merged.setup_name,
       account_name: accounts.find((a) => a.id === computed.account_id)?.name || merged.account_name,
@@ -710,20 +711,25 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
     if (supabase && user && isValidUUID(id)) {
       try {
-        const persisted = await tradeRepo.updateTrade(
-          id,
-          updatedTrade,
-          user.id,
-          accounts,
-          setups,
-          strategies
+        const persisted = await syncService.withLocalMutation(() =>
+          tradeRepo.updateTrade(
+            id,
+            updatedTrade,
+            user.id,
+            accounts,
+            setups,
+            strategies
+          )
         );
         updatedTrade = persisted;
         setSyncStatus('synced');
+        setSyncError(null);
       } catch (err: unknown) {
         console.error('Failed to update trade via TradeRepository:', err);
         const errorMsg = err instanceof Error ? err.message : 'Error al actualizar trade';
+        setSyncStatus('error');
         setSyncError(errorMsg);
+        throw err;
       }
     }
 
@@ -744,8 +750,6 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
   // Delete Trade
   const deleteTrade = async (id: string): Promise<void> => {
-    syncService.setLocalMutationLock(true, 1500);
-
     const target = trades.find((t) => t.id === id);
     if (!target) return;
 
@@ -762,8 +766,9 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        await tradeRepo.deleteTrade(id, user.id);
+        await syncService.withLocalMutation(() => tradeRepo.deleteTrade(id, user.id));
         setSyncStatus('synced');
+        setSyncError(null);
       } catch (err: unknown) {
         // Rollback state on error
         setTrades(previousTrades);
@@ -789,8 +794,6 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
   // Import Bulk Trades with duplicate detection
   const importTrades = async (newTrades: Partial<Trade>[]): Promise<{ imported: number; duplicates: number }> => {
-    syncService.setLocalMutationLock(true, 2000);
-
     let duplicateCount = 0;
     const added: Trade[] = [];
 
@@ -832,7 +835,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
         take_profit: computed.take_profit,
         position_size: Number(computed.position_size) || 1,
         contract_multiplier: Number(computed.contract_multiplier) || 1,
-        asset_class: computed.asset_class || 'CRYPTO',
+        asset_class: normalizeAssetClass(computed.asset_class || 'crypto'),
         tick_size: computed.tick_size,
         tick_value: computed.tick_value,
         risk_amount: computed.risk_amount,
@@ -867,19 +870,26 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
 
     if (supabase && user && added.length > 0) {
       try {
-        const persistedTrades = await tradeRepo.bulkCreateTrades(
-          added,
-          user.id,
-          accounts,
-          setups,
-          strategies
+        const persistedTrades = await syncService.withLocalMutation(() =>
+          tradeRepo.bulkCreateTrades(
+            added,
+            user.id,
+            accounts,
+            setups,
+            strategies
+          )
         );
         if (persistedTrades.length > 0) {
           finalAdded = persistedTrades;
           setSyncStatus('synced');
+          setSyncError(null);
         }
       } catch (err: unknown) {
-        console.warn('TradeRepo bulkCreateTrades warning:', err);
+        console.error('Failed to bulk create trades via TradeRepository:', err);
+        const errorMsg = err instanceof Error ? err.message : 'Error al importar trades';
+        setSyncStatus('error');
+        setSyncError(errorMsg);
+        throw err;
       }
     }
 
@@ -890,7 +900,7 @@ export function TradeProvider({ children }: { children: React.ReactNode }) {
     setTrades(nextTrades);
     persistState(nextTrades);
 
-    return { imported: added.length, duplicates: duplicateCount };
+    return { imported: finalAdded.length, duplicates: duplicateCount };
   };
 
   // Add custom Account

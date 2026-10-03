@@ -16,6 +16,8 @@ export class SyncService {
   private activeChannel: RealtimeChannel | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private isMutatingLocally = false;
+  private activeMutations = 0;
+  private cooldownTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {}
 
@@ -27,14 +29,68 @@ export class SyncService {
   }
 
   /**
-   * Sets local mutation lock to prevent Realtime from re-fetching own changes in a feedback loop.
+   * Deterministically begins a local mutation lifecycle.
+   * Realtime change notifications are suppressed while mutations are active.
    */
-  public setLocalMutationLock(active: boolean, durationMs = 1000) {
-    this.isMutatingLocally = active;
-    if (active && durationMs > 0) {
-      setTimeout(() => {
+  public beginLocalMutation(): void {
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+      this.cooldownTimer = null;
+    }
+    this.activeMutations++;
+    this.isMutatingLocally = true;
+  }
+
+  /**
+   * Concludes a local mutation.
+   * Once all active mutations complete, applies an optional cooldown window
+   * (default 300ms) to absorb in-flight Postgres Realtime echoes from the server.
+   */
+  public endLocalMutation(cooldownMs = 300): void {
+    this.activeMutations = Math.max(0, this.activeMutations - 1);
+    if (this.activeMutations === 0) {
+      if (this.cooldownTimer) {
+        clearTimeout(this.cooldownTimer);
+      }
+      if (cooldownMs > 0) {
+        this.cooldownTimer = setTimeout(() => {
+          if (this.activeMutations === 0) {
+            this.isMutatingLocally = false;
+          }
+          this.cooldownTimer = null;
+        }, cooldownMs);
+      } else {
         this.isMutatingLocally = false;
-      }, durationMs);
+      }
+    }
+  }
+
+  /**
+   * Helper executing an async mutation callback within a deterministic mutation lock.
+   * Realtime suppression remains active for the full async operation duration.
+   */
+  public async withLocalMutation<T>(fn: () => Promise<T>, cooldownMs = 300): Promise<T> {
+    this.beginLocalMutation();
+    try {
+      return await fn();
+    } finally {
+      this.endLocalMutation(cooldownMs);
+    }
+  }
+
+  /**
+   * Legacy mutation lock setter.
+   */
+  public setLocalMutationLock(active: boolean, durationMs = 1000): void {
+    if (active) {
+      this.beginLocalMutation();
+      if (durationMs > 0) {
+        setTimeout(() => {
+          this.endLocalMutation(0);
+        }, durationMs);
+      }
+    } else {
+      this.endLocalMutation(0);
     }
   }
 
@@ -102,6 +158,10 @@ export class SyncService {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
+    }
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+      this.cooldownTimer = null;
     }
 
     if (this.activeChannel) {

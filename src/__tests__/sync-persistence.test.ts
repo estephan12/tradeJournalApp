@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { isValidUUID, isDemoTrade, parseSupabaseTrade, sanitizeIntScale1to10 } from '../context/trade-context';
+import { isValidUUID, isDemoTrade, parseSupabaseTrade, sanitizeIntScale1to10, normalizeAssetClass } from '../context/trade-context';
 import { calculateRiskPercent, calculatePnL, calculateRiskAmount } from '../lib/calculations';
+import { Trade } from '../types/trade';
 
 describe('Sync & Persistence Safeguards', () => {
   it('sanitizes confidence and discipline into valid 1-10 integers for PostgreSQL', () => {
@@ -179,7 +180,7 @@ describe('Sync & Persistence Safeguards', () => {
       stop_loss: 4990,
       position_size: 2,
       contract_multiplier: 50,
-      asset_class: 'FUTURES' as const,
+      asset_class: 'futures' as const,
       tick_size: 0.25,
       tick_value: 12.5,
     };
@@ -207,7 +208,7 @@ describe('Sync & Persistence Safeguards', () => {
     const serialized = JSON.stringify(futuresTrade);
     const deserialized = JSON.parse(serialized);
     expect(deserialized.contract_multiplier).toBe(50);
-    expect(deserialized.asset_class).toBe('FUTURES');
+    expect(deserialized.asset_class).toBe('futures');
     expect(deserialized.tick_size).toBe(0.25);
     expect(deserialized.tick_value).toBe(12.5);
 
@@ -215,7 +216,7 @@ describe('Sync & Persistence Safeguards', () => {
     const payload = tradeToSupabasePayload(futuresTrade, 'user-real-1');
     const payloadNotes = payload.notes as Record<string, unknown>;
     expect(payloadNotes.contract_multiplier).toBe(50);
-    expect(payloadNotes.asset_class).toBe('FUTURES');
+    expect(payloadNotes.asset_class).toBe('futures');
     expect(payloadNotes.tick_size).toBe(0.25);
     expect(payloadNotes.tick_value).toBe(12.5);
 
@@ -236,7 +237,7 @@ describe('Sync & Persistence Safeguards', () => {
 
     const restoredTrade = parseSupabaseTrade(mockDbRow);
     expect(restoredTrade.contract_multiplier).toBe(50);
-    expect(restoredTrade.asset_class).toBe('FUTURES');
+    expect(restoredTrade.asset_class).toBe('futures');
     expect(restoredTrade.tick_size).toBe(0.25);
     expect(restoredTrade.tick_value).toBe(12.5);
   });
@@ -265,5 +266,121 @@ describe('Sync & Persistence Safeguards', () => {
     await simulateClearAllTrades(false);
     expect(localTrades.length).toBe(0);
     expect(localPersisted.length).toBe(0);
+  });
+
+  describe('Authenticated Write Failures & State Isolation', () => {
+    it('authenticated create failure does not appear as successfully synced data', async () => {
+      let stateTrades: Trade[] = [];
+      let syncStatus: string = 'idle';
+      let syncError: string | null = null;
+
+      const mockAddTrade = async (trade: Partial<Trade>, shouldFail: boolean) => {
+        if (shouldFail) {
+          syncStatus = 'error';
+          syncError = 'Cloud creation failed: 500 Internal Server Error';
+          throw new Error(syncError);
+        }
+        syncStatus = 'synced';
+        syncError = null;
+        stateTrades = [trade as Trade, ...stateTrades];
+      };
+
+      await expect(
+        mockAddTrade({ id: 'trade-fail', symbol: 'BTCUSDT' }, true)
+      ).rejects.toThrow('Cloud creation failed');
+
+      // Canonical local state must NOT be mutated with failed trade
+      expect(stateTrades).toHaveLength(0);
+      expect(syncStatus).toBe('error');
+      expect(syncError).toContain('Cloud creation failed');
+    });
+
+    it('authenticated update failure does not overwrite canonical local state', async () => {
+      const canonicalTrade: Trade = {
+        id: 'da8fa828-991a-46a9-913f-0a4773f7d06a',
+        user_id: 'user-1',
+        symbol: 'BTCUSDT',
+        direction: 'LONG',
+        date: '2026-09-01',
+        entry_price: 50000,
+        position_size: 1,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      let stateTrades: Trade[] = [canonicalTrade];
+      let syncStatus: string = 'synced';
+      let syncError: string | null = null;
+
+      const mockUpdateTrade = async (id: string, updates: Partial<Trade>, shouldFail: boolean) => {
+        if (shouldFail) {
+          syncStatus = 'error';
+          syncError = 'Cloud update failed: 403 Forbidden';
+          throw new Error(syncError);
+        }
+        syncStatus = 'synced';
+        syncError = null;
+        stateTrades = stateTrades.map((t) => (t.id === id ? { ...t, ...updates } : t));
+      };
+
+      await expect(
+        mockUpdateTrade(canonicalTrade.id, { symbol: 'ETHUSDT', entry_price: 3000 }, true)
+      ).rejects.toThrow('Cloud update failed');
+
+      // State remains strictly unchanged
+      expect(stateTrades[0].symbol).toBe('BTCUSDT');
+      expect(stateTrades[0].entry_price).toBe(50000);
+      expect(syncStatus).toBe('error');
+    });
+
+    it('authenticated import failure does not silently become synced local data', async () => {
+      let stateTrades: Trade[] = [];
+      let syncStatus: string = 'synced';
+      let syncError: string | null = null;
+
+      const mockImportTrades = async (batch: Partial<Trade>[], shouldFail: boolean) => {
+        if (shouldFail) {
+          syncStatus = 'error';
+          syncError = 'Bulk create failed: 503 Service Unavailable';
+          throw new Error(syncError);
+        }
+        syncStatus = 'synced';
+        syncError = null;
+        stateTrades = [...(batch as Trade[]), ...stateTrades];
+      };
+
+      await expect(
+        mockImportTrades([{ id: 'trade-imp-1', symbol: 'BTCUSDT' }], true)
+      ).rejects.toThrow('Bulk create failed');
+
+      expect(stateTrades).toHaveLength(0);
+      expect(syncStatus).toBe('error');
+      expect(syncError).toContain('Bulk create failed');
+    });
+  });
+
+  describe('Asset Class Normalization', () => {
+    it('normalizes representations, plurals, and synonyms to canonical vocabulary', () => {
+      expect(normalizeAssetClass('STOCK')).toBe('stocks');
+      expect(normalizeAssetClass('stock')).toBe('stocks');
+      expect(normalizeAssetClass('stocks')).toBe('stocks');
+      expect(normalizeAssetClass('Equities')).toBe('stocks');
+      expect(normalizeAssetClass('crypto')).toBe('crypto');
+      expect(normalizeAssetClass('CRYPTO')).toBe('crypto');
+      expect(normalizeAssetClass('cryptocurrency')).toBe('crypto');
+      expect(normalizeAssetClass('forex')).toBe('forex');
+      expect(normalizeAssetClass('FX')).toBe('forex');
+      expect(normalizeAssetClass('currency')).toBe('forex');
+      expect(normalizeAssetClass('future')).toBe('futures');
+      expect(normalizeAssetClass('FUTURES')).toBe('futures');
+      expect(normalizeAssetClass('option')).toBe('options');
+      expect(normalizeAssetClass('Options')).toBe('options');
+      expect(normalizeAssetClass('index')).toBe('indices');
+      expect(normalizeAssetClass('INDICES')).toBe('indices');
+      expect(normalizeAssetClass('cfd')).toBe('cfd');
+      expect(normalizeAssetClass('CFDS')).toBe('cfd');
+      expect(normalizeAssetClass('unknown_asset')).toBe('other');
+      expect(normalizeAssetClass(null)).toBe('other');
+      expect(normalizeAssetClass(undefined)).toBe('other');
+    });
   });
 });

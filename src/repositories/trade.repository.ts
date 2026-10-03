@@ -102,15 +102,16 @@ export class TradeRepository {
     }
   }
 
-  async deleteTrades(ids: string[]): Promise<void> {
-    if (!this.supabase || ids.length === 0) return;
+  async deleteTrades(ids: string[], userId: string): Promise<void> {
+    if (!this.supabase || !userId || ids.length === 0) return;
     const validIds = ids.filter(isValidUUID);
     if (validIds.length === 0) return;
 
     const { error } = await this.supabase
       .from('trades')
       .delete()
-      .in('id', validIds);
+      .in('id', validIds)
+      .eq('user_id', userId);
 
     if (error) {
       throw error;

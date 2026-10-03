@@ -1,6 +1,7 @@
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { Trade, TradeDirection } from '@/types/trade';
+import { Trade } from '@/types/trade';
+import { normalizeAssetClass } from '@/lib/trades/trade-validation';
 
 export interface ColumnMapping {
   csvColumn: string;
@@ -14,6 +15,7 @@ export const TARGET_FIELDS: { key: keyof Trade | 'ignore'; label: string }[] = [
   { key: 'entry_time', label: 'Entry Time (HH:MM)' },
   { key: 'exit_time', label: 'Exit Time (HH:MM)' },
   { key: 'symbol', label: 'Symbol / Asset / Ticker' },
+  { key: 'asset_class', label: 'Asset Class (stocks, crypto, forex, etc.)' },
   { key: 'direction', label: 'Direction (LONG/SHORT or BUY/SELL)' },
   { key: 'entry_price', label: 'Entry Price' },
   { key: 'exit_price', label: 'Exit Price' },
@@ -94,6 +96,9 @@ export function autoDetectColumnMapping(headers: string[]): ColumnMapping[] {
     }
     if (/^(mistake|error|flaw)$/.test(clean)) {
       return { csvColumn: header, targetField: 'mistake', confidence: 0.8 };
+    }
+    if (/^(assetclass|assettype|securitytype|instrumenttype|class)$/.test(clean)) {
+      return { csvColumn: header, targetField: 'asset_class', confidence: 0.95 };
     }
 
     return { csvColumn: header, targetField: 'ignore', confidence: 0 };
@@ -226,6 +231,10 @@ export function normalizeRow(
 
       case 'timeframe':
         result.timeframe = valStr;
+        break;
+
+      case 'asset_class':
+        result.asset_class = normalizeAssetClass(valStr);
         break;
 
       case 'emotion':

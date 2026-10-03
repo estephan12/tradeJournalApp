@@ -226,4 +226,17 @@ describe('SyncService & Realtime Architecture', () => {
     await new Promise((r) => setTimeout(r, 50)); // wait for debounce
     expect(onRemoteChange).toHaveBeenCalledTimes(1);
   });
+
+  it('mutation lock remains active for the full duration of an async operation with withLocalMutation', async () => {
+    expect(syncService.getIsMutatingLocally()).toBe(false);
+
+    let insideOperationStatus = false;
+    await syncService.withLocalMutation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      insideOperationStatus = syncService.getIsMutatingLocally();
+    }, 0);
+
+    expect(insideOperationStatus).toBe(true);
+    expect(syncService.getIsMutatingLocally()).toBe(false);
+  });
 });

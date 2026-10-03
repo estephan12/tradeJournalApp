@@ -1,5 +1,5 @@
 import { Trade, Account, Setup, Strategy } from '../../types/trade';
-import { sanitizeIntScale1to10, isValidUUID } from './trade-validation';
+import { sanitizeIntScale1to10, isValidUUID, normalizeAssetClass } from './trade-validation';
 
 /**
  * Transforms a Supabase database row into a canonical Trade entity.
@@ -19,7 +19,8 @@ export function parseSupabaseTrade(
   const setupName = notes.setup_name ? String(notes.setup_name) : userSetups.find((s) => s.id === row.setup_id)?.name || undefined;
 
   // Multi-asset persistence compatibility (direct column if exists, otherwise notes DTO)
-  const assetClass = (row.asset_class as string) || (notes.asset_class as string) || null;
+  const rawAssetClass = (row.asset_class as string) || (notes.asset_class as string) || null;
+  const assetClass = rawAssetClass ? normalizeAssetClass(rawAssetClass) : null;
   const contractMultiplier = row.contract_multiplier !== undefined && row.contract_multiplier !== null
     ? Number(row.contract_multiplier)
     : notes.contract_multiplier !== undefined && notes.contract_multiplier !== null
@@ -123,7 +124,7 @@ export function tradeToSupabasePayload(trade: Partial<Trade>, userId: string): R
       account_name: trade.account_name,
       strategy_name: trade.strategy_name,
       setup_name: trade.setup_name,
-      asset_class: trade.asset_class || null,
+      asset_class: trade.asset_class ? normalizeAssetClass(trade.asset_class) : null,
       contract_multiplier: trade.contract_multiplier ?? 1,
       tick_size: trade.tick_size ?? null,
       tick_value: trade.tick_value ?? null,

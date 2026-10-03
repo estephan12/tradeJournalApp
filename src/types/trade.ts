@@ -35,12 +35,12 @@ export type TradeMistake =
   | 'None';
 
 export type AssetClass =
-  | 'stock'
+  | 'stocks'
   | 'crypto'
   | 'forex'
-  | 'future'
-  | 'option'
-  | 'index'
+  | 'futures'
+  | 'options'
+  | 'indices'
   | 'cfd'
   | 'other';
 

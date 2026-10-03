@@ -136,23 +136,28 @@ describe('Repository Layer Unit Tests', () => {
     });
 
     it('deletes multiple trades filtering strictly for valid UUIDs', async () => {
-      const deleteInMock = vi.fn().mockResolvedValue({ error: null });
+      const deleteEqMock = vi.fn().mockResolvedValue({ error: null });
+      const deleteInMock = vi.fn().mockReturnValue({ eq: deleteEqMock });
       mockSupabase.from.mockReturnValue({
         delete: vi.fn().mockReturnValue({ in: deleteInMock }),
       });
 
       const repo = new TradeRepository(mockClient);
-      await repo.deleteTrades([
-        'da8fa828-991a-46a9-913f-0a4773f7d06a',
-        'trade-non-uuid',
-        '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
-      ]);
+      await repo.deleteTrades(
+        [
+          'da8fa828-991a-46a9-913f-0a4773f7d06a',
+          'trade-non-uuid',
+          '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+        ],
+        'user-1'
+      );
 
       expect(mockSupabase.from).toHaveBeenCalledWith('trades');
       expect(deleteInMock).toHaveBeenCalledWith('id', [
         'da8fa828-991a-46a9-913f-0a4773f7d06a',
         '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
       ]);
+      expect(deleteEqMock).toHaveBeenCalledWith('user_id', 'user-1');
     });
 
     it('deletes all trades for a given user', async () => {
@@ -166,6 +171,53 @@ describe('Repository Layer Unit Tests', () => {
 
       expect(mockSupabase.from).toHaveBeenCalledWith('trades');
       expect(deleteEqUserMock).toHaveBeenCalledWith('user_id', 'user-1');
+    });
+
+    it('throws error when createTrade fails in Supabase', async () => {
+      mockSupabase.from.mockReturnValue({
+        insert: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: null, error: new Error('DB Connection Timeout') }),
+          }),
+        }),
+      });
+
+      const repo = new TradeRepository(mockClient);
+      await expect(
+        repo.createTrade({ symbol: 'BTCUSDT' }, 'user-1')
+      ).rejects.toThrow('DB Connection Timeout');
+    });
+
+    it('throws error when updateTrade fails in Supabase', async () => {
+      mockSupabase.from.mockReturnValue({
+        update: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              select: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({ data: null, error: new Error('RLS Violation') }),
+              }),
+            }),
+          }),
+        }),
+      });
+
+      const repo = new TradeRepository(mockClient);
+      await expect(
+        repo.updateTrade('da8fa828-991a-46a9-913f-0a4773f7d06a', { symbol: 'BTCUSDT' }, 'user-1')
+      ).rejects.toThrow('RLS Violation');
+    });
+
+    it('throws error when bulkCreateTrades fails in Supabase', async () => {
+      mockSupabase.from.mockReturnValue({
+        insert: vi.fn().mockReturnValue({
+          select: vi.fn().mockResolvedValue({ data: null, error: new Error('Bulk insert failed') }),
+        }),
+      });
+
+      const repo = new TradeRepository(mockClient);
+      await expect(
+        repo.bulkCreateTrades([{ symbol: 'BTCUSDT' }], 'user-1')
+      ).rejects.toThrow('Bulk insert failed');
     });
   });
 
