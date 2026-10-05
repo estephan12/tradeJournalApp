@@ -111,18 +111,40 @@ export interface Trade {
   // Structural Isolation
   is_demo?: boolean;
 
+  // Canonical Timestamps & Lifecycle
+  status?: 'OPEN' | 'CLOSED' | 'CANCELLED';
+  entry_at?: string | null;
+  exit_at?: string | null;
+  emotion_before?: string | null;
+  emotion_during?: string | null;
+  emotion_after?: string | null;
+
   created_at: string;
   updated_at: string;
 }
+
+export type AccountType = 'personal' | 'broker' | 'prop_firm' | 'crypto' | 'demo';
+export type AccountStatus = 'active' | 'passed' | 'failed' | 'archived';
 
 export interface Account {
   id: string;
   user_id: string;
   name: string;
+  broker?: string | null;
+  account_type?: AccountType;
   initial_balance: number;
+  current_balance?: number;
   currency: string;
   is_default: boolean;
+  is_prop_firm?: boolean;
+  prop_firm_name?: string | null;
+  phase?: string | null;
+  profit_target?: number | null;
+  daily_loss_limit?: number | null;
+  max_loss_limit?: number | null;
+  status?: AccountStatus;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Strategy {
@@ -130,15 +152,66 @@ export interface Strategy {
   user_id: string;
   name: string;
   description?: string | null;
+  market?: string | null;
+  preferred_session?: string | null;
+  preferred_timeframe?: string | null;
+  risk_rules?: string | null;
+  management_rules?: string | null;
+  exit_rules?: string | null;
+  active?: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Setup {
   id: string;
   user_id: string;
+  strategy_id?: string | null;
   name: string;
   description?: string | null;
+  entry_criteria?: string | null;
+  confirmation_rules?: string | null;
+  invalidation_rules?: string | null;
   created_at: string;
+  updated_at?: string;
+}
+
+export type RuleType = 'ENTRY' | 'CONFIRMATION' | 'RISK' | 'MANAGEMENT' | 'EXIT';
+
+export interface StrategyRule {
+  id: string;
+  user_id: string;
+  strategy_id: string;
+  title: string;
+  description?: string | null;
+  rule_type: RuleType;
+  required: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface TradeRuleResult {
+  id: string;
+  user_id: string;
+  trade_id: string;
+  rule_id: string;
+  followed: boolean;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface Mistake {
+  id: string;
+  user_id: string;
+  name: string;
+  category?: string | null;
+  created_at: string;
+}
+
+export interface TradeMistakeLink {
+  trade_id: string;
+  mistake_id: string;
 }
 
 export interface Tag {
@@ -147,6 +220,7 @@ export interface Tag {
   name: string;
   color?: string | null;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface TradeFilterOptions {
